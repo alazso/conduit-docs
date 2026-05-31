@@ -1,0 +1,70 @@
+---
+title: "Capabilities"
+description: "Structural and fine-grained capability detection."
+---
+
+Conduit never makes you guess what a provider can do, and it never throws `UnsupportedOperationException` in production for a feature a provider simply lacks. Capability is enforced **two** ways, and they are deliberately separate.
+
+## 1. Structural capabilities (the type system)
+
+Banking, multi-currency, transaction history, and leaderboards are expressed as **extension interfaces**: `BankingEconomy`, `MultiCurrencyEconomy`, `TransactionalEconomy`, `LeaderboardEconomy`. Discovery is by asking the registry:
+
+```java
+Optional<BankingEconomy> bank = Conduit.getRegistry().getProvider(BankingEconomy.class);
+```
+
+If the active provider does not implement banking, you get `Optional.empty()`. If you hold a `BankingEconomy` reference, **every method on it is unconditionally callable**: calling a structural-capability method must never throw `CapabilityNotSupportedException`. The type system is the enforcement mechanism.
+
+There is intentionally **no** `Capability.BANKING`, `Capability.MULTI_CURRENCY`, or `Capability.TRANSACTION_HISTORY`. If you find yourself wanting one, you are recreating a structural feature as a runtime flag. Use the extension interface instead. See [Extension Interfaces](/docs/extension-interfaces).
+
+## 2. Fine-grained capabilities (runtime flags)
+
+Some features live *inside* an interface a provider already implements, where a specific method depends on an optional ability. These are `Capability` enum flags, queried via the `Capable` interface that `Economy` extends:
+
+```java
+public enum Capability {
+    ECONOMY_OFFLINE_PLAYERS,      // can act on accounts for offline players
+    ECONOMY_FRACTIONAL_BALANCES,  // balances support sub-integer precision
+    ECONOMY_PREFLIGHT,            // implements canDeposit / canWithdraw
+}
+```
+
+```java
+public interface Capable {
+    Set<Capability> capabilities();
+    default boolean supports(Capability c) { return capabilities().contains(c); }
+}
+```
+
+### Using a fine-grained capability
+
+Query before calling a gated method:
+
+```java
+if (economy.supports(Capability.ECONOMY_PREFLIGHT)) {
+    economy.canWithdraw(uuid, price).thenAccept(allowed -> { /* ... */ });
+}
+```
+
+The preflight methods `canDeposit` / `canWithdraw` are annotated `@RequiresCapability(Capability.ECONOMY_PREFLIGHT)`. Calling a gated method without the capability is the case `CapabilityNotSupportedException` exists for. So check first.
+
+## Deciding which kind a feature is
+
+| Question | Answer |
+|---|---|
+| Is it a whole feature area (banks, currencies, history)? | Structural. Use an extension interface. |
+| Is it an optional ability of a method on an interface the provider already implements? | Fine-grained. Use a `Capability` flag. |
+
+Mixing the two is the "dual-surface" pattern Conduit was designed to eliminate. Keep them separate.
+
+## Provider responsibilities
+
+- Return an **honest** `capabilities()` set. Advertise a flag only if the corresponding method genuinely works.
+- Implement an extension interface only if the backend genuinely supports that feature area.
+- Bridges especially: never advertise a capability the wrapped backend lacks (see [Building a Bridge](/docs/building-a-bridge)).
+
+## Consumer responsibilities
+
+- For structural features, branch on `getProvider(Extension.class)` presence and degrade gracefully (hide the UI, disable the command).
+- For fine-grained features, call `supports(...)` before the gated method.
+- Treat absence as normal, not exceptional. The whole point is that "not supported" is a first-class, queryable state.

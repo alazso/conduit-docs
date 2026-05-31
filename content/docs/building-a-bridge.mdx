@@ -1,0 +1,111 @@
+---
+title: "Building a Bridge"
+description: "Adapt an existing economy plugin to Conduit."
+---
+
+A **bridge** adapts an existing economy plugin (EssentialsX, CMI, a points plugin, anything) to the Conduit `Economy` interface. From Conduit's point of view a bridge is just a provider, so read the [Provider Guide](/docs/provider-guide) first. This page covers the parts specific to wrapping someone else's backend.
+
+## When to write a bridge
+
+- The economy plugin you want to support does **not** implement Conduit natively.
+- You want servers running that plugin to expose its balances to Conduit consumers.
+
+If the plugin's author is willing to implement Conduit directly, that is always better than a bridge (one fewer adapter to maintain). Bridges are the compatibility path for backends that will not or cannot adopt Conduit natively.
+
+## Start from the template
+
+Copy `bridges/bridge-template`. It is a minimal, compiling provider skeleton wired to register with Conduit. The official `bridges/bridge-essentialsx` is a real, working reference you can read alongside it.
+
+## The shape of a bridge
+
+A bridge is a class that:
+
+1. Implements `Economy` (plus any extension interfaces the underlying plugin can support).
+2. Translates each Conduit call into the underlying plugin's API.
+3. Translates the underlying plugin's results back into `EconomyResult` and `Balance`.
+4. Registers itself with the Conduit registry.
+
+```java
+public final class FooEconomyBridge implements Economy {
+
+    private final FooEconomyApi foo;      // the wrapped plugin's API
+    private final Currency currency;
+
+    @Override public String getName() { return "FooEconomy"; }
+    @Override public Currency defaultCurrency() { return currency; }
+    @Override public Set<Capability> capabilities() {
+        // Advertise ONLY what Foo can actually do.
+        return Set.of(Capability.ECONOMY_OFFLINE_PLAYERS);
+    }
+
+    @Override
+    public CompletableFuture<EconomyResult> withdraw(UUID uuid, BigDecimal amount) {
+        return CompletableFuture.supplyAsync(() -> {
+            if (foo.getBalance(uuid).compareTo(amount) < 0) {
+                return new EconomyResult.InsufficientFunds(foo.getBalance(uuid), amount, currency);
+            }
+            BigDecimal after = foo.subtract(uuid, amount);
+            return new EconomyResult.Success(uuid, currency, after, null);
+        });
+    }
+    // ...
+}
+```
+
+## The hard parts of bridging
+
+### `double` backends and precision
+
+Most legacy economy plugins store `double`. Converting `double` to `BigDecimal` re-introduces the floating-point error you are trying to escape. Use `BigDecimal.valueOf(d)` (which goes through the canonical `String` form) rather than `new BigDecimal(d)` (which captures the full binary error), and round to the currency's `decimalPlaces()` deliberately. Document that precision is limited by the underlying backend, and **do not** advertise `ECONOMY_FRACTIONAL_BALANCES` if the backend cannot honor it.
+
+### Synchronous backends
+
+If the wrapped plugin is synchronous and main-thread-only, you cannot simply move its calls to another thread. Options:
+
+- Marshal to the main thread for the underlying call, then complete the future. This keeps correctness at the cost of main-thread time.
+- On Java 25 you can use a virtual-thread executor to avoid pinning platform threads while you wait, but the underlying plugin's threading rules still apply.
+
+Be honest about what you can deliver: a bridge over a sync backend is still bounded by that backend.
+
+### Capabilities and extensions: advertise only what is real
+
+The cardinal rule of bridging: never claim a capability the backend lacks.
+
+- Implement `BankingEconomy` only if the backend has real shared accounts.
+- Implement `MultiCurrencyEconomy` only if it has real multiple currencies.
+- Implement `TransactionalEconomy` only if it has real history and you can honor the idempotency contract.
+- Put a flag in `capabilities()` only if the corresponding method truly works.
+
+A bridge that lies about capabilities turns "graceful degradation" into runtime surprises for every consumer.
+
+### Atomic transfer
+
+If the backend lacks an atomic transfer, you must either implement one safely (for example, withdraw and, on failure to credit, refund), or accept that you are emulating it. Prefer the backend's native transfer if it has one. Document the guarantee you actually provide.
+
+## Registering and lifecycle
+
+Register when both Conduit and the wrapped plugin are ready. Because Conduit registration is order-insensitive, the simplest robust pattern is to register in your bridge plugin's enable once the wrapped plugin's API is available:
+
+```java
+@Override
+public void onEnable() {
+    FooEconomyApi foo = hookFoo();   // get the wrapped plugin's API
+    FooEconomyBridge bridge = new FooEconomyBridge(foo);
+    Conduit.getRegistry().register(Economy.class, bridge, this, ServicePriority.Normal);
+}
+
+@Override
+public void onDisable() {
+    // unregister if you kept a reference
+}
+```
+
+Use `paper-plugin.yml` load-ordering so the wrapped plugin and Conduit load before your bridge.
+
+## Prove it with conformance tests
+
+Run your bridge (or a faithful in-memory stand-in for the backend) against the conformance suite. A bridge that passes `AbstractEconomyConformanceTest` behaves like every other Conduit economy from a consumer's perspective, which is the whole point. See [Testing & Conformance](/docs/testing-and-conformance).
+
+## Publishing your bridge
+
+Bridges are independent JARs. Ship yours separately; it depends on `conduit-api` (`compileOnly`) and the wrapped plugin's API (`compileOnly`), and declares both as `paper-plugin.yml` dependencies. Submit it to the community list so operators can find it. The Conduit team ships a small number of first-party reference bridges (EssentialsX); the long tail is community-owned by design.

@@ -1,13 +1,52 @@
 ---
-title: Hello World
-description: Your first document
+title: "Conduit"
+description: "A modern, async-first Economy abstraction for Minecraft."
 ---
 
-Welcome to the docs! You can start writing documents in `/content/docs`.
+Conduit is a modern, single-domain **Economy** abstraction for Minecraft. It targets Paper/Folia on Java 25 and is async-first, `BigDecimal`-everywhere, and UUID-native. It is **not** a Vault fork or shim. It is its own API under `so.alaz.conduit`.
 
-## What is Next?
+If you have ever fought Vault's synchronous calls, `double` money, missing events, or load-order races, Conduit is the abstraction that fixes those at the design level instead of papering over them.
 
-<Cards>
-  <Card title="Learn more about Next.js" href="https://nextjs.org/docs" />
-  <Card title="Learn more about Fumadocs" href="https://fumadocs.dev" />
-</Cards>
+## Pick your path
+
+| You are... | Start here |
+|---|---|
+| A server operator installing Conduit | [Installation](/docs/installation) → [Configuration](/docs/configuration) → [Commands](/docs/commands) |
+| A plugin developer who wants to **use** an economy (shops, rewards, jobs) | [Consumer Guide](/docs/consumer-guide) → [How-To Recipes](/docs/how-to) |
+| A developer porting a plugin off Vault | [Migrating from Vault](/docs/migration-from-vault) |
+| A developer **implementing** an economy backend | [Provider Guide](/docs/provider-guide) → [Testing & Conformance](/docs/testing-and-conformance) |
+| A developer bridging an existing economy plugin (EssentialsX, etc.) | [Building a Bridge](/docs/building-a-bridge) |
+| Anyone who wants the mental model first | [Core Concepts](/docs/core-concepts) |
+
+## What Conduit is (and is not)
+
+**It is** a clean economy contract: one interface, many backends, zero coupling between the plugins that spend money and the plugin that stores it. Consumers depend only on `conduit-api`. Providers implement it. The `conduit-core` plugin wires everything together at runtime.
+
+**It is not** a permission API, a chat API, a metadata API, or a Vault compatibility layer. Conduit ships no `net.milkbowl.vault.*` shims and does not let Vault plugins run unchanged. If you need permissions use LuckPerms; if you need chat use a chat plugin; if you want Vault, keep Vault. Conduit is for plugins and servers that deliberately adopt `so.alaz.conduit.api` for economy.
+
+## The five design commitments
+
+1. **Async by default.** Every operation that touches storage returns a `CompletableFuture`. There is no synchronous facade.
+2. **`BigDecimal` everywhere.** No `double` anywhere in the public API. Floating-point money is structurally excluded.
+3. **UUID-first.** Accounts are keyed by `UUID`. There is no name-based fallback on the primary surface.
+4. **Capability-aware.** You ask what a provider supports, structurally (extension interfaces) and via flags, before you call it.
+5. **Typed results and events.** Sealed `EconomyResult` cases, post-commit events, and synchronous pre-auth interceptors.
+
+## Module map
+
+```
+conduit-api              Public API: interfaces, records, results. Zero implementation.
+conduit-core             The runtime plugin: registry, dispatch, events, commands, metrics.
+bridges/bridge-essentialsx   Native EssentialsX Economy bridge.
+bridges/bridge-template      Starter template for community bridges.
+conduit-test-fixtures        Conformance tests + MockEconomy.
+examples/                Reference plugins: shop, points, per-action fees, multi-economy.
+```
+
+## Versioning
+
+- Group `so.alaz.conduit`, current version `0.2.3` (pre-1.0).
+- API version constant: `Conduit.API_VERSION` (`"1.0"`). Providers declare a minimum via `Economy.requiredApiVersion()`; the registry rejects providers that require a newer API than the running runtime.
+- Pre-1.0, the core contract is stabilizing. Anything annotated `@ApiStatus.Experimental` may change before 1.0.
+
+See the [Glossary](/docs/glossary) if any term here is unfamiliar.

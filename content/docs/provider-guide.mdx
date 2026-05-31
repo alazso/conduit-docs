@@ -1,0 +1,152 @@
+---
+title: "Provider Guide"
+description: "Implement an economy backend and register it with Conduit."
+---
+
+This guide is for developers building an economy **backend**: a plugin that stores balances and exposes them through Conduit. If you are adapting an existing economy plugin (EssentialsX, CMI, etc.), read [Building a Bridge](/docs/building-a-bridge) first; it builds on this page.
+
+## 1. Implement `Economy`
+
+Your provider implements `so.alaz.conduit.api.economy.Economy` (which extends `Capable`). Every storage-touching method returns a `CompletableFuture`.
+
+```java
+public final class MyEconomy implements Economy {
+
+    private final Currency currency =
+        SimpleCurrency.ofDefault("coins", "$", 2);
+
+    @Override public String getName() { return "MyEconomy"; }
+    @Override public Currency defaultCurrency() { return currency; }
+
+    @Override public Set<Capability> capabilities() {
+        return Set.of(Capability.ECONOMY_PREFLIGHT, Capability.ECONOMY_OFFLINE_PLAYERS);
+    }
+
+    @Override
+    public CompletableFuture<EconomyResult> deposit(UUID uuid, BigDecimal amount) {
+        return CompletableFuture.supplyAsync(() -> {
+            BigDecimal after = creditInStore(uuid, amount);
+            return new EconomyResult.Success(uuid, currency, after, /* transaction */ null);
+        });
+    }
+
+    // ... the remaining Economy methods
+}
+```
+
+### What you do and do not implement
+
+You implement the **economy behavior**: storage, balance math, account lifecycle. You do **not** implement amount validation, events, interceptors, or caller attribution. The registry wraps your provider in a **dispatch layer** that adds all of that. Concretely:
+
+- Do **not** re-check for null/negative/zero/scale-overflow amounts. The dispatch boundary already threw `IllegalArgumentException` synchronously before your method is called.
+- Do **not** fire `EconomyTransactionEvent`. The dispatch layer fires it post-commit from your `Success`.
+- Do **not** read `CallerToken` to decide policy. Interceptors handle pre-auth.
+
+This is why the conformance suite (see [Testing & Conformance](/docs/testing-and-conformance)) tests **provider domain behavior**, not validation.
+
+### `requiredApiVersion()`
+
+Override it if you rely on API features newer than `1.0`:
+
+```java
+@Override public String requiredApiVersion() { return "1.0"; }
+```
+
+The registry refuses to register a provider that requires a newer API than the running runtime (`Conduit.API_VERSION`), failing fast with a clear message rather than breaking at call time.
+
+## 2. Return the right `EconomyResult`
+
+Map your outcomes onto the sealed cases. Be honest: do not return `Success` for a no-op.
+
+| Situation | Return |
+|---|---|
+| Operation committed | `Success(account, currency, newBalance, transaction?)` |
+| Not enough funds (withdraw/transfer) | `InsufficientFunds(balance, requested, currency)` |
+| No such account | `AccountNotFound(uuid)` |
+| Currency not supported by the account | `CurrencyNotSupported(currency)` |
+| Backend failure (IO, SQL, etc.) | `ProviderError(message, cause)` |
+
+`transaction` in `Success` may be `null` when the operation is not recorded as a `Transaction` (for example `set()`). `Rejected` is produced by the dispatch layer when an interceptor vetoes; you never return it yourself.
+
+## 3. Add structural capabilities via extension interfaces
+
+If your backend supports banks, multiple currencies, history, or leaderboards, implement the matching extension interface **on the same class**. This preserves backend identity: the same instance answers base and extended queries.
+
+```java
+public final class MyEconomy
+        implements TransactionalEconomy, MultiCurrencyEconomy {
+    // both extension interfaces, one backend
+}
+```
+
+Each extension is documented in [Extension Interfaces](/docs/extension-interfaces). Fine-grained, within-interface capabilities are declared in `capabilities()` and checked by consumers via `supports(...)`; see [Capabilities](/docs/capabilities).
+
+## 4. Register your provider
+
+Register once, under your **most-derived** service type, during your plugin's enable. Registration is order-insensitive; consumers using `whenProviderAvailable` will pick you up whenever you register.
+
+```java
+@Override
+public void onEnable() {
+    MyEconomy economy = new MyEconomy(/* ... */);
+    Conduit.getRegistry().register(
+        // most-derived type your provider implements
+        TransactionalEconomy.class,
+        economy,
+        this,                       // your Plugin
+        ServicePriority.Normal
+    );
+}
+```
+
+### Registration & resolution contract (normative)
+
+1. **Most-derived registration.** Register a provider under the single most-derived type it implements. If it implements several sibling extensions (say `TransactionalEconomy` and `BankingEconomy`) with no common subtype, either declare a composite interface in your own module that extends both, or pick one type to register under. The registry does not guess.
+2. **Hierarchy-walking resolution.** `getProvider(Economy.class)` resolves any provider registered under a subtype. A provider registered as `TransactionalEconomy` is found by queries for both `TransactionalEconomy` and `Economy`.
+3. **Priority tie-break.** When multiple providers satisfy a query, highest `ServicePriority` wins; within equal priority, earliest registration wins. Subtype specificity is **not** a tiebreaker.
+4. **No duplicate-instance registration.** The same instance cannot be registered twice. To expose one backend under several interfaces, implement them all on one class and register under the most-derived type; the hierarchy walk does the rest.
+5. **Swaps fire `ActiveProviderChangeEvent`** per base service key when the active provider for that key changes.
+
+Unregister on disable:
+
+```java
+@Override
+public void onDisable() {
+    Conduit.getRegistry().unregister(TransactionalEconomy.class, economy);
+}
+```
+
+## 5. Threading and async
+
+- Do real IO off the main thread. Return a future that completes when the work is done; do not block inside the method.
+- On Folia, respect region threading for any Bukkit-side work. Pure storage logic can run on your own executor.
+- Idempotent operations (`TransactionalEconomy`) must be safe to retry. See the idempotency contract in [Extension Interfaces](/docs/extension-interfaces); a reusable `IdempotencyStore` helper lives in `so.alaz.conduit.api.economy.support`.
+
+## 6. Optional: extend `AbstractEconomyProvider`
+
+`so.alaz.conduit.api.economy.support.AbstractEconomyProvider` provides scaffolding for common provider chores so you implement less boilerplate. Use it if it fits; it is not required.
+
+## 7. Prove correctness
+
+Before shipping, run your provider against the conformance fixtures in `conduit-test-fixtures`:
+
+```java
+class MyEconomyConformanceTest extends AbstractEconomyConformanceTest {
+    @Override protected Economy createEconomy() {
+        return new MyEconomy(/* fresh, isolated instance */);
+    }
+}
+```
+
+There are matching base classes for banking, multi-currency, and transactional providers. Green conformance is the bar for a trustworthy provider. Full detail: [Testing & Conformance](/docs/testing-and-conformance).
+
+## Checklist
+
+- [ ] Implements `Economy` (and any extension interfaces on the same class)
+- [ ] `getName()` is stable and unique enough for operators to pin via `provider-override`
+- [ ] `capabilities()` is honest
+- [ ] Returns correct `EconomyResult` cases, including `InsufficientFunds` and `ProviderError`
+- [ ] Does **not** re-validate amounts, fire events, or read caller tokens
+- [ ] Registers under the most-derived type, once, with a sensible `ServicePriority`
+- [ ] Unregisters on disable
+- [ ] Passes the conformance suite

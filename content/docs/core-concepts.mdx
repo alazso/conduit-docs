@@ -1,0 +1,100 @@
+---
+title: "Core Concepts"
+description: "The mental model: async, BigDecimal, UUID, capabilities, registry."
+---
+
+This page is the mental model behind every other page. Read it once and the rest of the wiki will make sense.
+
+## The abstraction
+
+Conduit sits between two kinds of plugin:
+
+- **Consumers** spend, check, or move money: shops, jobs, rewards, casinos, quests.
+- **Providers** store money: an economy plugin or a bridge to one.
+
+```
+Consumer plugins  ──▶  conduit-api  ◀──  Provider (economy backend)
+                          ▲
+                          │ installed & wired at runtime by
+                          │
+                     conduit-core (the plugin)
+```
+
+Consumers depend only on `conduit-api`. Providers implement it. Neither imports the other. The `conduit-core` plugin owns the runtime that connects them. This strict boundary is the whole point: a shop never knows or cares whether the money lives in EssentialsX, a SQL database, or a custom ledger.
+
+## Async by default
+
+Every operation that could touch storage returns a `CompletableFuture`. There is no blocking convenience method, on purpose: a synchronous facade is how Vault ended up freezing the main thread on database calls.
+
+```java
+economy.deposit(uuid, new BigDecimal("100.00"), "reward")
+    .thenAccept(result -> { /* runs when the backend finishes */ });
+```
+
+In tests you may block with `.join()`. In production code you chain. See the [Consumer Guide](/docs/consumer-guide) for patterns.
+
+## BigDecimal everywhere
+
+No `double` appears anywhere in the public API: not in interfaces, records, results, or parameters. Money is `java.math.BigDecimal`. This structurally excludes floating-point drift (the `0.1 + 0.2` problem) from interest, taxes, and exchange-rate math.
+
+**Amount rules (normative):**
+- Amounts to `deposit`, `withdraw`, and `transfer` are **magnitudes**: always positive. The sign is implied by the method name.
+- A null, negative, or zero amount throws `IllegalArgumentException` **synchronously** at the call boundary. This is a programming error, not a money outcome, so it is not delivered through the future.
+- `set(uuid, amount)` accepts `amount >= 0` (zero is a legitimate balance).
+- An amount whose scale exceeds the currency's `decimalPlaces()` throws `IllegalArgumentException`. The currency, not the provider, defines allowed precision.
+
+## UUID-first
+
+Accounts are identified by `java.util.UUID`. There is no name-based lookup on the primary API. Names change; UUIDs do not. This also makes offline operations and non-player accounts (towns, NPCs, system accounts) natural.
+
+## Capabilities
+
+You never guess what a provider can do. There are two layers:
+
+- **Structural capabilities** are expressed by **extension interfaces**: `BankingEconomy`, `MultiCurrencyEconomy`, `TransactionalEconomy`, `LeaderboardEconomy`. You discover them by asking the registry: `getProvider(BankingEconomy.class)` returns empty if the active economy has no banks.
+- **Fine-grained capabilities** are runtime flags inside an interface a provider already implements: `Capability.ECONOMY_PREFLIGHT`, `ECONOMY_OFFLINE_PLAYERS`, `ECONOMY_FRACTIONAL_BALANCES`. You query `economy.supports(Capability.X)` before calling a gated method.
+
+Full detail: [Capabilities](/docs/capabilities) and [Extension Interfaces](/docs/extension-interfaces).
+
+## Typed results
+
+Fallible operations return sealed result types instead of booleans:
+
+- `EconomyResult`: `Success`, `InsufficientFunds`, `AccountNotFound`, `CurrencyNotSupported`, `Rejected`, `ProviderError`.
+- `OperationResult`: `Success`, `Failure` (for void-like operations).
+- `Result<T>`: generic `Success<T>` / `Failure<T>`.
+
+You pattern-match them, and the compiler makes sure you consider every case.
+
+## The registry
+
+The `ProviderRegistry` is the heart of `conduit-core`. It wraps Bukkit's `ServicesManager` but adds typed capability queries, nullable-vs-required lookup, order-insensitive consumption, hot-swap, and provider-change events. Resolution walks the type hierarchy: a query for `Economy.class` resolves a provider registered under any subtype (for example `TransactionalEconomy`). See the [Provider Guide](/docs/provider-guide) for the registration contract.
+
+## Dispatch decoration
+
+Every `Economy` the registry hands out is already **wrapped** with a dispatch layer that performs synchronous amount validation, runs pre-auth [interceptors](/docs/events-and-interceptors), and fires post-commit events. Providers do not implement any of that; they just implement the economy behavior. Consumers get validation, events, and interceptors for free.
+
+## Caller identity
+
+Operations carry a `CallerToken` so events and audits can attribute "which plugin moved this money." A token is bound with `CallerToken.runWith(...)` and propagates through Conduit's async dispatch via `ScopedValue`. Unbound calls are attributed to `CallerToken.ANONYMOUS`. See [Caller Identity](/docs/caller-identity).
+
+## Events vs interceptors
+
+- **Events** (`EconomyTransactionEvent`, `EconomyAccountEvent`, ...) are **post-commit and non-cancellable**. By the time you see one, the money already moved. Safe across async.
+- **Interceptors** (`EconomyTransactionInterceptor`) are **pre-authorization**, synchronous, and can veto an operation before it runs.
+
+Detail: [Events & Interceptors](/docs/events-and-interceptors).
+
+## The static entry point
+
+`so.alaz.conduit.api.Conduit` is the facade most code starts from:
+
+```java
+Conduit.isInitialized();                       // is the runtime up?
+Conduit.getRegistry();                          // the ProviderRegistry
+Conduit.getEconomy();                           // active Economy or throws
+Conduit.findEconomy();                          // Optional<Economy>
+Conduit.whenProviderAvailable(Economy.class, e -> ...); // order-insensitive
+```
+
+With these concepts in hand, jump to the guide for your role.

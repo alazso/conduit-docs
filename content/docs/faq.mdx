@@ -1,0 +1,83 @@
+---
+title: "FAQ"
+description: "Frequently asked questions."
+---
+
+## General
+
+**Is Conduit a Vault replacement?**
+For economy, yes, but not a drop-in one. Conduit is its own API under `so.alaz.conduit`. It does not ship `net.milkbowl.vault.*` shims and Vault plugins do not run on it unchanged. Porting is a deliberate code change. See [Migrating from Vault](/docs/migration-from-vault).
+
+**Does Conduit do permissions or chat like Vault did?**
+No. Conduit is economy-only by design. Use LuckPerms for permissions and a chat plugin for chat. This narrow focus is intentional: one domain, done correctly.
+
+**Why economy only?**
+Money is where Vault's failures hurt most (float corruption, no events, no transactional semantics, no Folia story) and where a correct abstraction has the highest leverage. Permissions are already solved by LuckPerms; chat formatting does not benefit from a single abstraction.
+
+**What server software and Java version do I need?**
+Paper or Folia on Minecraft 26.1+, running Java 25. Bukkit/Spigot are best-effort.
+
+**What license is Conduit under?**
+MIT.
+
+## For operators
+
+**I installed Conduit but nothing happened.**
+Conduit stores no money itself. You also need an economy provider or a bridge (for example EssentialsX plus the EssentialsX bridge). See [Installation](/docs/installation) and [Troubleshooting](/docs/troubleshooting).
+
+**I have two economy plugins. Which one wins?**
+The highest-priority registration, then earliest registered on ties. Pin a specific one with `economy.provider-override` in the config. See [Configuration](/docs/configuration).
+
+**Does Conduit phone home?**
+Only if you opt in. Metrics default to `enabled: false`, and the update checker (a single startup request to GitHub) can be turned off. Conduit sends nothing while metrics are disabled.
+
+**Will my old Vault economy data transfer automatically?**
+No automatic transfer. Use `/conduit economy convert <from> <to> --dry-run` to preview, then run it for real. See [Commands](/docs/commands).
+
+## For consumer developers
+
+**Why is everything a `CompletableFuture`? Can I get a synchronous version?**
+No, and that is deliberate. A synchronous facade is how economies end up blocking the main thread on database calls. Embrace the async chain; use `.thenAccept`, `.thenCompose`, and marshal back to the main thread for Bukkit calls. In tests you may `.join()`.
+
+**How do I avoid the Vault load-order race?**
+Use `Conduit.whenProviderAvailable(Economy.class, ...)`. It runs your code whenever a provider exists, before or after your plugin enables.
+
+**Why `BigDecimal` instead of `double`?**
+To structurally exclude floating-point money errors. Use `new BigDecimal("100.00")` or `BigDecimal.valueOf(long)`. Never `new BigDecimal(someDouble)`.
+
+**How do I know if the provider supports banks / multiple currencies / history?**
+Ask the registry for the extension interface: `getProvider(BankingEconomy.class)` returns empty if unsupported. For method-level options, check `economy.supports(Capability.X)`. See [Capabilities](/docs/capabilities).
+
+**My transaction shows up as "anonymous" in logs. Why?**
+You did not bind a `CallerToken`. Call `registry.registerCaller(this)` once and wrap calls in `CallerToken.runWith(token, ...)`. See [Caller Identity](/docs/caller-identity).
+
+**Can I cancel a transaction?**
+Not with an event (events are post-commit and non-cancellable). Use an `EconomyTransactionInterceptor` to veto **before** the operation runs. See [Events & Interceptors](/docs/events-and-interceptors).
+
+**Is there a shorter way to deposit without all the result handling?**
+Wrap the resolve-and-handle pattern once in your own plugin (see the helper in the [Consumer Guide](/docs/consumer-guide)). A first-party convenience facade is on the roadmap and, when it ships, will be marked experimental until the 1.0 API freeze. Keep any helper async and `BigDecimal`.
+
+## For provider developers
+
+**Do I need to validate amounts or fire events?**
+No. The dispatch layer that wraps your provider validates amounts (throwing `IllegalArgumentException` synchronously) and fires post-commit events. You implement only the economy behavior. See the [Provider Guide](/docs/provider-guide).
+
+**How do I expose banks and multi-currency from one backend?**
+Implement both extension interfaces on one class and register under the most-derived type (or a composite interface you declare). The registry's hierarchy walk resolves all views to your single instance.
+
+**How do I prove my provider is correct?**
+Run it against the conformance fixtures in `conduit-test-fixtures`. See [Testing & Conformance](/docs/testing-and-conformance).
+
+**What is `requiredApiVersion()` for?**
+It declares the minimum Conduit API your provider needs. The registry refuses to register a provider that requires a newer API than the running runtime, failing fast with a clear message.
+
+**Should I ship my bridge in the Conduit repo?**
+No. Bridges are independent JARs, community-owned by design. The Conduit team maintains a small number of reference bridges (EssentialsX); everything else lives in its own project. See [Building a Bridge](/docs/building-a-bridge).
+
+## Roadmap-ish
+
+**Will bridges always be necessary?**
+Bridges are a permanent compatibility layer, but their importance declines as plugins adopt Conduit natively. A specific bridge becomes unnecessary the day its backend implements Conduit directly. No bridge is *required* once any native provider exists.
+
+**Is the API stable?**
+The core contract is stabilizing pre-1.0. Types marked `@ApiStatus.Experimental` may change before 1.0. `Economy` and the core result/model types are intended to be stable.

@@ -1,0 +1,89 @@
+---
+title: "Events & Interceptors"
+description: "Post-commit events and pre-authorization interceptors."
+---
+
+Vault's most glaring omission was that nothing could react to money moving. Conduit fixes this with two distinct mechanisms that you must not confuse:
+
+- **Events** tell you something **already happened**. Post-commit, non-cancellable, safe across async.
+- **Interceptors** let you **block something before it happens**. Pre-authorization, synchronous, can veto.
+
+## Events (post-commit, non-cancellable)
+
+Economy events fire on the server thread **after** the `CompletableFuture` completes and the change is committed. By the time a handler runs, the transaction has happened. They are ordinary Bukkit events.
+
+### `EconomyTransactionEvent`
+
+```java
+@EventHandler
+public void onTransaction(EconomyTransactionEvent event) {
+    Transaction txn = event.transaction();  // full immutable record
+    CallerToken caller = event.caller();    // which plugin initiated it
+    // analytics, audit logging, quest progress, achievements, Discord feed...
+}
+```
+
+`Transaction` carries everything: `id`, `type`, `actor`, `target`, `currency`, `amount`, `balanceBefore`, `balanceAfter`, `reason`, `metadata`, `timestamp`. The `metadata` map is economy-scoped audit tags (for example `shop_id`, `item_id`) that consumers can attach via the `TransactionBuilder`.
+
+### `EconomyAccountEvent`
+
+```java
+@EventHandler
+public void onAccount(EconomyAccountEvent event) {
+    UUID uuid = event.uuid();
+    AccountEventType type = event.type();   // CREATED or DELETED
+}
+```
+
+### Provider lifecycle events
+
+- `ProviderRegisterEvent` / `ProviderUnregisterEvent`: a provider was added or removed.
+- `ActiveProviderChangeEvent`: the active provider for a given service key changed (a higher-priority provider arrived, or an override was applied). Listen with the base type you care about to answer "is the active `Economy` still my backend?"
+
+### Why events are non-cancellable
+
+Firing a cancellable Bukkit event from an async `CompletableFuture` chain is not safe: handlers assume the main thread, and the only way to honor that from async is to serialize every economy operation through main, which destroys the async benefit. Post-commit events work correctly across async at zero serialization cost. For anything that needs to **prevent** an operation, use an interceptor.
+
+## Interceptors (pre-authorization, synchronous, vetoing)
+
+`EconomyTransactionInterceptor` is a synchronous hook that runs **before** the async operation starts. Return `false` to abort: no money moves and no `EconomyTransactionEvent` fires (the dispatch layer produces an `EconomyResult.Rejected` instead).
+
+```java
+@FunctionalInterface
+public interface EconomyTransactionInterceptor {
+    boolean allow(/* operation context: actor, target, amount, type, currency */);
+}
+```
+
+Register and unregister via the registry:
+
+```java
+CallerToken token = registry.registerCaller(this);
+registry.registerInterceptor(myInterceptor, this, ServicePriority.High);
+// ...
+registry.unregisterInterceptor(myInterceptor);
+```
+
+### Threading contract
+
+An interceptor runs on the thread that initiated the economy call. On Folia that is the entity's region thread; on Paper it is typically the main thread. Implementations must be **thread-safe** and **must not block**. Do quick, in-memory policy checks here, not IO.
+
+### What interceptors are for
+
+- Anti-cheat: reject economically impossible gains.
+- Spending limits, cooldowns, parental controls, gambling self-exclusion.
+- Account freezes and moderation holds.
+- Regional or permission gating.
+
+If you catch yourself wanting to do a database lookup inside an interceptor, restructure: keep an in-memory view that you update from events, and consult that view synchronously.
+
+## Choosing between them
+
+| You want to... | Use |
+|---|---|
+| Log, analyze, or react after money moved | Event |
+| Update a leaderboard or quest on spend | Event |
+| Stop a transaction before it happens | Interceptor |
+| Enforce a spending policy or anti-cheat rule | Interceptor |
+
+A common pattern uses both: an interceptor enforces the rule synchronously, and an event feeds the analytics that the rule reads from.

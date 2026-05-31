@@ -1,0 +1,29 @@
+{
+  "title": "Conduit",
+  "pages": [
+    "index",
+    "glossary",
+    "faq",
+    "---Server Operators---",
+    "installation",
+    "configuration",
+    "commands",
+    "troubleshooting",
+    "---Concepts---",
+    "core-concepts",
+    "capabilities",
+    "extension-interfaces",
+    "events-and-interceptors",
+    "caller-identity",
+    "---Consumers---",
+    "consumer-guide",
+    "how-to",
+    "migration-from-vault",
+    "---Providers---",
+    "provider-guide",
+    "building-a-bridge",
+    "testing-and-conformance",
+    "---Reference---",
+    "api-reference"
+  ]
+}

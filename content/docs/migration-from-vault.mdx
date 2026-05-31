@@ -1,0 +1,183 @@
+---
+title: "Migrating from Vault"
+description: "Port a Vault consumer plugin to Conduit."
+---
+
+This guide is for plugin developers porting a Vault **consumer** (a plugin that uses an economy) to Conduit. Provider authors should read the [Provider Guide](/docs/provider-guide) and [Building a Bridge](/docs/building-a-bridge).
+
+> Important: Conduit is not a drop-in Vault replacement. There is no `net.milkbowl.vault.*` shim and no automatic compatibility. Migration is a deliberate code change. The upside is that the whole class of Vault bugs (float money, sync blocking, load-order races, no events) disappears.
+
+## Mental model shift
+
+| Vault assumption | Conduit reality |
+|---|---|
+| Synchronous: results return immediately | Async: results arrive via `CompletableFuture` |
+| `double` money | `BigDecimal` money |
+| Player names (historically) | `UUID` accounts |
+| Grab provider in `onEnable`, hope load order is right | `whenProviderAvailable`, order-insensitive |
+| `boolean` + `EconomyResponse.errorMessage` | Sealed `EconomyResult` you pattern-match |
+| No events | Post-commit events + pre-auth interceptors |
+
+## Dependency and manifest
+
+**Before (Vault):**
+
+```yaml
+# plugin.yml
+depend: [Vault]
+```
+
+**After (Conduit):**
+
+```yaml
+# paper-plugin.yml
+dependencies:
+  server:
+    Conduit:
+      load: BEFORE
+      required: true
+```
+
+```kotlin
+// build.gradle.kts
+dependencies {
+    compileOnly("so.alaz.conduit:conduit-api:0.2.3")
+}
+```
+
+## Hooking the economy
+
+**Before (Vault):**
+
+```java
+private Economy economy;
+
+@Override
+public void onEnable() {
+    if (getServer().getPluginManager().getPlugin("Vault") == null) {
+        getServer().getPluginManager().disablePlugin(this);
+        return;
+    }
+    RegisteredServiceProvider<Economy> rsp =
+        getServer().getServicesManager().getRegistration(Economy.class);
+    if (rsp == null) {
+        getServer().getPluginManager().disablePlugin(this);
+        return;
+    }
+    economy = rsp.getProvider();
+}
+```
+
+**After (Conduit):** the presence check, the null check, the self-disable, and the load-order risk all disappear.
+
+```java
+@Override
+public void onEnable() {
+    // nothing required here; resolution is order-insensitive
+}
+
+private void useEconomy(Consumer<Economy> action) {
+    Conduit.whenProviderAvailable(Economy.class, action);
+}
+```
+
+## Depositing
+
+**Before (Vault):**
+
+```java
+EconomyResponse r = economy.depositPlayer(player, 100.00);  // double, synchronous, blocks
+if (r.transactionSuccess()) {
+    getLogger().info("New balance: " + economy.format(r.balance));  // double field
+}
+```
+
+**After (Conduit):**
+
+```java
+economy.deposit(player.getUniqueId(), new BigDecimal("100.00"), "daily reward")
+    .thenAccept(result -> {
+        if (result instanceof EconomyResult.Success s) {
+            getLogger().info("New balance: " + economy.format(s.newBalance()));
+        }
+    });
+```
+
+Note three improvements for free: it is off the main thread, it is `BigDecimal`, and the `"daily reward"` reason is now part of the transaction record and the event stream.
+
+## Checking and withdrawing
+
+**Before:**
+
+```java
+if (economy.has(player, price)) {
+    EconomyResponse r = economy.withdrawPlayer(player, price);
+    if (r.transactionSuccess()) { grantItem(); }
+}
+```
+
+**After:** prefer letting the result tell you, rather than a check-then-act race.
+
+```java
+economy.withdraw(player.getUniqueId(), price, "shop purchase")
+    .thenAccept(result -> {
+        switch (result) {
+            case EconomyResult.Success s -> grantItem();         // marshal to main thread first
+            case EconomyResult.InsufficientFunds f -> tell(player, "You need " + f.requested());
+            default -> tell(player, "Purchase failed.");
+        }
+    });
+```
+
+If you genuinely need a preflight check, use `canWithdraw` (guarded by `Capability.ECONOMY_PREFLIGHT`).
+
+## Player-to-player payment
+
+**Before:** withdraw from one, deposit to the other, and hope nothing fails in between (the classic dupe/loss bug).
+
+**After:** one atomic call.
+
+```java
+economy.transfer(fromUuid, toUuid, amount, "player payment")
+    .thenAccept(result -> { /* Success / InsufficientFunds / ... */ });
+```
+
+## Formatting and balance
+
+```java
+economy.getBalance(uuid).thenAccept(balance ->
+    tell(player, "Balance: " + economy.format(balance.amount())));   // balance.amount() is BigDecimal
+```
+
+## Things that need rethinking, not translating
+
+- **Synchronous flow.** Any code that read a Vault balance and immediately branched on it must become a `thenAccept`/`thenCompose` chain. You cannot return a balance synchronously from Conduit.
+- **Main-thread Bukkit calls.** Inside a future callback you are off the main thread. Marshal back with your scheduler before sending messages or touching the world.
+- **`double` arithmetic.** Replace with `BigDecimal`. Use `new BigDecimal("100.00")` (string constructor) or `BigDecimal.valueOf(long)`, never `new BigDecimal(double)`.
+- **Permissions / chat.** Vault also fronted permissions and chat. Conduit does **not**. Use LuckPerms and a chat plugin directly for those.
+
+## New capabilities you did not have on Vault
+
+Once migrated, you can do things Vault could not express at all:
+
+- React to money movement with [`EconomyTransactionEvent`](/docs/events-and-interceptors).
+- Veto transactions with an [interceptor](/docs/events-and-interceptors) (anti-cheat, limits).
+- Use [banks, multi-currency, history, leaderboards](/docs/extension-interfaces) when the provider supports them.
+- Attribute your transactions with [`CallerToken`](/docs/caller-identity).
+- Tag transactions with metadata for analytics via the `TransactionBuilder`.
+
+## Migrating balances between economies (operators)
+
+If you are also moving the **data** from a Vault-era economy to a Conduit-native one, the `/conduit economy convert` command does async, batched migration with a `--dry-run` preview. See [Commands](/docs/commands).
+
+## Porting checklist
+
+- [ ] Swap `depend: [Vault]` for a Conduit `paper-plugin.yml` dependency
+- [ ] Replace `getRegistration` hookup with `whenProviderAvailable`
+- [ ] Convert every economy call to its async `CompletableFuture` form
+- [ ] Replace `double` with `BigDecimal` end to end
+- [ ] Replace name lookups with `UUID`
+- [ ] Pattern-match `EconomyResult` instead of checking a boolean
+- [ ] Replace manual withdraw+deposit with `transfer`
+- [ ] Marshal back to the main thread before Bukkit calls in callbacks
+- [ ] (Optional) bind a `CallerToken`, listen to events, add interceptors

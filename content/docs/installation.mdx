@@ -1,0 +1,52 @@
+---
+title: "Installation"
+description: "Install Conduit and an economy provider on Paper or Folia."
+---
+
+This page is for server owners installing Conduit. If you are a developer, see the [Consumer Guide](/docs/consumer-guide) or [Provider Guide](/docs/provider-guide).
+
+## Requirements
+
+| Requirement | Detail |
+|---|---|
+| Server software | Paper or Folia. Paper is first-class; Bukkit/Spigot are best-effort. |
+| Minecraft version | 26.1 or newer (the "year.drop.hotfix" versioning era). |
+| Java | Java 25 (required by Paper 26.1+). |
+
+Conduit will not load on older Java or older server software, because it uses Java 25 language features (records, sealed types, scoped values) and the Paper bootstrapper/loader lifecycle.
+
+## What Conduit does on its own
+
+Conduit is an **abstraction layer**. By itself it stores no balances. It needs an **economy provider**: either
+
+- an economy plugin that implements Conduit natively, or
+- a **bridge** that adapts an existing economy plugin (for example EssentialsX) to Conduit.
+
+Installing Conduit with no provider is valid but inert: consumer plugins will simply find no economy. See [Troubleshooting](/docs/troubleshooting) if `/conduit` reports no active provider.
+
+## Steps
+
+1. Download the Conduit plugin JAR (single file, the API is bundled inside it).
+2. Drop it into your server's `plugins/` folder.
+3. Install at least one economy provider or bridge. For example, install EssentialsX plus the Conduit EssentialsX bridge.
+4. Start the server once to generate `plugins/Conduit/config.yml`.
+5. (Optional) Edit the config, then run `/conduit reload` or restart. See [Configuration](/docs/configuration).
+6. Verify with `/conduit info` (or the equivalent status command) that an active economy provider is shown.
+
+## Load order
+
+Conduit uses `paper-plugin.yml` and declares its soft dependencies (EssentialsX, PlaceholderAPI) with proper load-ordering. You do **not** need to manually tune load order for bridges. Provider registration in Conduit is order-insensitive: a bridge can register before or after consumer plugins enable, and consumers that use `whenProviderAvailable(...)` will still resolve it. This eliminates the classic Vault `onEnable` race.
+
+## Multiple providers
+
+If more than one economy provider is installed, Conduit selects the **highest-priority** registration. You can force a specific one with the `economy.provider-override` config key (see [Configuration](/docs/configuration)) or inspect the active selection with the `/conduit` command (see [Commands](/docs/commands)).
+
+## Updating
+
+Conduit can check GitHub Releases on startup and log an advisory if a newer version exists. This is controlled by `update-checker.enabled` in the config and performs a single cached async request, not a per-join HTTP call.
+
+## Next steps
+
+- [Configuration](/docs/configuration): every config key explained.
+- [Commands](/docs/commands): the `/conduit` admin surface.
+- [Troubleshooting](/docs/troubleshooting): "no provider", load issues, and more.

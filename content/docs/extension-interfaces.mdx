@@ -1,0 +1,130 @@
+---
+title: "Extension Interfaces"
+description: "Banking, multi-currency, transactional, and leaderboard interfaces."
+---
+
+Banks, multiple currencies, transaction history, and leaderboards are **not** methods on the base `Economy`. They are separate interfaces that each `extends Economy`. This is Conduit's structural capability model: a provider that supports banking implements `BankingEconomy`; one that does not, does not. Consumers discover support by asking the registry, and the answer is either a working handle or `Optional.empty()`, never an `UnsupportedOperationException`.
+
+Because each extension extends `Economy`, **backend identity is preserved**: the same provider instance answers base and extended queries. There is no separate "bank service" that could resolve to a different backend than your main economy.
+
+## Discovering an extension (consumer side)
+
+```java
+Conduit.getRegistry().getProvider(BankingEconomy.class)
+    .ifPresentOrElse(
+        bank -> { /* banking is available */ },
+        ()   -> { /* active economy has no banks; hide the bank UI */ });
+```
+
+## Implementing an extension (provider side)
+
+Implement it on the **same class** as your base economy and register under the most-derived type. To expose more than one extension, implement them all on one class. If they are siblings with no common subtype, declare a composite interface in your own module:
+
+```java
+// In your module, your responsibility, not Conduit's.
+public interface MyFullEconomy extends TransactionalEconomy, BankingEconomy {}
+```
+
+Register `MyFullEconomy.class` and the hierarchy walk resolves all of `Economy`, `TransactionalEconomy`, `BankingEconomy`, and `MyFullEconomy` to your one instance.
+
+---
+
+## `BankingEconomy`
+
+Shared accounts: towns, guilds, factions, companies, joint accounts.
+
+```java
+CompletableFuture<EconomyResult> createBank(String name, UUID owner);
+CompletableFuture<EconomyResult> deleteBank(String name);
+CompletableFuture<List<String>> getBanks();
+
+CompletableFuture<Balance> getBankBalance(String name);
+CompletableFuture<EconomyResult> bankDeposit(String name, UUID depositor, BigDecimal amount);
+CompletableFuture<EconomyResult> bankWithdraw(String name, UUID withdrawer, BigDecimal amount);
+
+CompletableFuture<Boolean> isBankOwner(String name, UUID uuid);
+CompletableFuture<Boolean> isBankMember(String name, UUID uuid);
+CompletableFuture<Set<UUID>> getBankMembers(String name);
+
+CompletableFuture<Boolean> playerHasBankPermission(String bank, UUID uuid, AccountPermission permission);
+CompletableFuture<OperationResult> setBankMemberPermission(String bank, UUID member, AccountPermission permission, boolean granted);
+CompletableFuture<Set<AccountPermission>> getBankMemberPermissions(String bank, UUID uuid);
+```
+
+`AccountPermission` is granular: `BALANCE`, `DEPOSIT`, `WITHDRAW`, `TRANSFER`, `OWNER`, `ALL`. `OWNER` implies all non-`ALL` permissions; `ALL` is shorthand for everything. Use `permission.includes(other)` to test coverage.
+
+---
+
+## `MultiCurrencyEconomy`
+
+Multiple currencies on one account: gold plus gems plus event tokens, forex, premium vs free currency.
+
+```java
+Set<Currency> supportedCurrencies();
+CompletableFuture<Boolean> accountSupportsCurrency(UUID uuid, Currency currency);
+CompletableFuture<Balance> getBalance(UUID uuid, Currency currency);
+CompletableFuture<EconomyResult> deposit(UUID uuid, BigDecimal amount, Currency currency);
+CompletableFuture<EconomyResult> withdraw(UUID uuid, BigDecimal amount, Currency currency);
+CompletableFuture<EconomyResult> transfer(UUID from, UUID to, BigDecimal amount, Currency currency);
+```
+
+**Default-currency equivalence (normative):** the inherited no-currency operations (`deposit(uuid, amount)`, etc.) must behave exactly like the currency-bearing overload called with `defaultCurrency()`.
+
+**Unsupported currency (normative):** if an account does not support the requested currency, the operation resolves to `EconomyResult.CurrencyNotSupported`. For `transfer`, this applies symmetrically: if either side lacks the currency, the future resolves to `CurrencyNotSupported` and the source is not debited (transfers are atomic).
+
+---
+
+## `TransactionalEconomy`
+
+An append-only ledger: history queries and idempotent, exactly-once mutations. Designed for engines that keep a complete history.
+
+```java
+CompletableFuture<List<Transaction>> getTransactionHistory(UUID uuid, int limit);
+CompletableFuture<List<Transaction>> getTransactionHistory(UUID uuid, TransactionFilter filter);
+
+CompletableFuture<EconomyResult> depositIdempotent(UUID uuid, BigDecimal amount, UUID operationId);
+CompletableFuture<EconomyResult> withdrawIdempotent(UUID uuid, BigDecimal amount, UUID operationId);
+CompletableFuture<EconomyResult> transferIdempotent(UUID from, UUID to, BigDecimal amount, UUID operationId);
+```
+
+`TransactionFilter(type?, currency?, after?, before?, limit)` filters history; `TransactionFilter.recent(limit)` is the common case.
+
+### Idempotency contract (normative)
+
+1. **Uniqueness scope is per-account.** `operationId` is unique within the primary account: `uuid` for deposit/withdraw, `from` for transfer. A fresh `UUID.randomUUID()` satisfies this trivially.
+2. **Same id + same parameters returns the original result** verbatim (same `newBalance`, same `Transaction`). The operation is not re-executed and the ledger is not appended twice.
+3. **Same id + different parameters throws.** The returned future fails with `IdempotencyMismatchException`. This is a corruption-detection path, not undefined behavior.
+
+Parameter equality is computed over intrinsic arguments: `amount` (compared with `compareTo`, not `equals`), `uuid`/`from`/`to`, and `currency` where applicable. `reason` and metadata are descriptive, not part of the key. The `so.alaz.conduit.api.economy.support.IdempotencyStore` helper implements this for you.
+
+Idempotency makes safe retries possible across network failures and crashes: the foundation for reliable cross-server transfers and crash-safe payouts.
+
+---
+
+## `LeaderboardEconomy`
+
+Top balances, for `/baltop`-style features.
+
+```java
+CompletableFuture<List<RankedBalance>> getTopBalances(int offset, int limit);
+default CompletableFuture<List<RankedBalance>> getTopBalances(int limit); // offset 0
+```
+
+`RankedBalance(rank, owner, currency, amount)` carries a 1-based `rank`. Implement this only if your backend can produce ordered balances efficiently; consumers should fall back gracefully when it is absent (for example, hide the leaderboard command).
+
+---
+
+## The `TransactionBuilder`
+
+Every `Economy` exposes a fluent builder via the default `transaction()` method, for composing an operation with a reason, metadata, and (on multi-currency providers) a currency:
+
+```java
+economy.transaction()
+    .deposit(uuid, new BigDecimal("50.00"))
+    .reason("quest reward")
+    .metadata("quest_id", "dragon-slayer")
+    .currency(gems)          // only valid on a MultiCurrencyEconomy handle
+    .execute();              // CompletableFuture<EconomyResult>
+```
+
+If you call `.currency(...)` on a handle that is not a `MultiCurrencyEconomy`, the builder fails fast with a clear `IllegalStateException` rather than a confusing `UnsupportedOperationException`.

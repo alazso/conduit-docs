@@ -1,0 +1,54 @@
+---
+title: "Glossary"
+description: "Definitions of Conduit terms."
+---
+
+**Account**: A balance holder identified by a `UUID`. Usually a player, but can be a non-player entity (town, NPC, system) since identity is just a UUID.
+
+**Bridge**: A provider that adapts an existing economy plugin (EssentialsX, CMI, etc.) to the Conduit `Economy` interface. See [Building a Bridge](/docs/building-a-bridge).
+
+**`CallerToken`**: A bound identity representing the plugin that initiated an operation, propagated through async work via Java 25 `ScopedValue`. Replaces Vault's spoofable plugin-name string. See [Caller Identity](/docs/caller-identity).
+
+**Capability**: An ability a provider may or may not have. **Structural** capabilities are extension interfaces (`BankingEconomy`, etc.); **fine-grained** capabilities are `Capability` enum flags checked with `supports(...)`. See [Capabilities](/docs/capabilities).
+
+**`Capable`**: The interface (extended by `Economy`) exposing `capabilities()` and `supports(Capability)`.
+
+**Consumer**: A plugin that uses an economy (shop, jobs, rewards). Depends only on `conduit-api`. See [Consumer Guide](/docs/consumer-guide).
+
+**`conduit-api`**: The public API artifact: interfaces, records, results, with zero implementation and no shaded dependencies. Consumers add it as `compileOnly`.
+
+**`conduit-core`**: The runtime plugin that installs the registry, wraps providers in the dispatch layer, fires events, and provides commands and metrics.
+
+**Currency**: A unit of money with id, names, symbol, decimal places, and formatting. `SimpleCurrency` is the standard record implementation; `SimpleCurrency.ofDefault(id, symbol, decimals)` is the common factory.
+
+**Dispatch layer**: The decoration the registry wraps around every resolved `Economy`. It performs synchronous amount validation, runs pre-auth interceptors, and fires post-commit events, so providers do not.
+
+**`EconomyResult`**: The sealed result of a money mutation: `Success`, `InsufficientFunds`, `AccountNotFound`, `CurrencyNotSupported`, `Rejected`, `ProviderError`. Pattern-matched by consumers.
+
+**Event**: A post-commit, non-cancellable notification that something happened (`EconomyTransactionEvent`, `EconomyAccountEvent`, provider lifecycle events). See [Events & Interceptors](/docs/events-and-interceptors).
+
+**Extension interface**: An interface that `extends Economy` to add a feature area: `BankingEconomy`, `MultiCurrencyEconomy`, `TransactionalEconomy`, `LeaderboardEconomy`. Preserves backend identity. See [Extension Interfaces](/docs/extension-interfaces).
+
+**Idempotency**: The guarantee that re-submitting the same `operationId` with the same parameters does not double-execute. Provided by `TransactionalEconomy`'s `*Idempotent` methods. Mismatched re-submissions throw `IdempotencyMismatchException`.
+
+**Interceptor**: `EconomyTransactionInterceptor`: a synchronous, pre-authorization hook that can veto an operation before it runs. Returning `false` produces `EconomyResult.Rejected`.
+
+**Magnitude**: A positive amount. `deposit`/`withdraw`/`transfer` take magnitudes; direction comes from the method name, not the sign.
+
+**Most-derived registration**: Registering a provider once, under the single most-specific service type it implements, so the hierarchy walk can resolve all base and extended queries to it.
+
+**`OperationResult`**: The sealed result of a void-like operation: `Success` or `Failure`. Has `orThrow()`.
+
+**Preflight**: The optional `canDeposit`/`canWithdraw` checks, gated by `Capability.ECONOMY_PREFLIGHT`.
+
+**Provider**: A plugin that implements `Economy` and stores balances. Registered with the `ProviderRegistry`. See [Provider Guide](/docs/provider-guide).
+
+**`ProviderRegistry`**: The registry that holds providers, resolves them by type with hierarchy walking and priority tie-breaking, and offers order-insensitive consumption (`whenProviderAvailable`).
+
+**`ServicePriority`**: Bukkit's priority enum used to break ties when multiple providers satisfy a query. Highest wins; earliest registration breaks equal-priority ties.
+
+**`Transaction`**: The immutable record of a completed money movement: id, type, actor, target, currency, amount, balances before/after, reason, metadata, timestamp.
+
+**`TransactionBuilder`**: A fluent builder (`economy.transaction()`) for composing an operation with a reason, metadata, and optional currency, ending in `execute()`.
+
+**`whenProviderAvailable`**: The order-insensitive way to consume a provider: runs immediately if one is registered, otherwise once one registers. Eliminates the `onEnable` load-order race.

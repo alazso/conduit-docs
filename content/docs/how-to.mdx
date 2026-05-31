@@ -1,0 +1,205 @@
+---
+title: "How-To Recipes"
+description: "Task-oriented recipes for common economy operations."
+---
+
+Task-oriented answers to "how do I X?" Each recipe assumes you have resolved an `Economy` (see the [Consumer Guide](/docs/consumer-guide)) and imports are omitted for brevity. All amounts are `BigDecimal`; all calls are async.
+
+## How do I check a player's balance?
+
+```java
+economy.getBalance(uuid).thenAccept(balance -> {
+    BigDecimal amount = balance.amount();
+    // marshal to main thread before messaging the player
+});
+```
+
+## How do I give or take money?
+
+```java
+economy.deposit(uuid, new BigDecimal("250"), "quest reward");
+economy.withdraw(uuid, new BigDecimal("50"), "repair cost");
+```
+
+Handle the returned `EconomyResult` if you care about success or failure.
+
+## How do I safely pay one player from another?
+
+Use atomic `transfer`, never manual withdraw+deposit:
+
+```java
+economy.transfer(fromUuid, toUuid, price, "trade")
+    .thenAccept(result -> {
+        if (result instanceof EconomyResult.InsufficientFunds f) {
+            // payer is broke; nothing was moved
+        }
+    });
+```
+
+## How do I check whether a player can afford something?
+
+```java
+if (economy.supports(Capability.ECONOMY_PREFLIGHT)) {
+    economy.canWithdraw(uuid, price).thenAccept(ok -> { /* ... */ });
+} else {
+    // fall back to reading the balance, or just attempt the withdraw and
+    // branch on InsufficientFunds
+    economy.getBalance(uuid).thenAccept(b -> {
+        boolean affordable = b.amount().compareTo(price) >= 0;
+    });
+}
+```
+
+Prefer attempting the operation and branching on `InsufficientFunds`: it avoids a check-then-act race.
+
+## How do I format money for display?
+
+```java
+String text = economy.format(amount);   // uses the active currency's rules
+```
+
+## How do I run code as soon as an economy is available (no load-order pain)?
+
+```java
+Conduit.whenProviderAvailable(Economy.class, economy -> {
+    // runs immediately if present, otherwise when one registers
+});
+```
+
+## How do I react when any money moves?
+
+Listen to the post-commit event:
+
+```java
+@EventHandler
+public void onTxn(EconomyTransactionEvent event) {
+    Transaction t = event.transaction();
+    // analytics, quests, Discord feed
+}
+```
+
+## How do I block a transaction before it happens?
+
+Register an interceptor (synchronous, vetoing):
+
+```java
+registry.registerInterceptor(ctx -> isAllowed(ctx), this, ServicePriority.High);
+```
+
+Return `false` to abort; the operation resolves to `EconomyResult.Rejected`. See [Events & Interceptors](/docs/events-and-interceptors).
+
+## How do I attribute transactions to my plugin?
+
+```java
+CallerToken token = Conduit.getRegistry().registerCaller(this);   // once
+CallerToken.runWith(token, () -> economy.deposit(uuid, amount, "sale"));
+```
+
+See [Caller Identity](/docs/caller-identity) for executor-boundary rules.
+
+## How do I work with banks?
+
+Banks are a structural capability; check for the interface first:
+
+```java
+Conduit.getRegistry().getProvider(BankingEconomy.class).ifPresent(bank -> {
+    bank.createBank("town_spawn", ownerUuid);
+    bank.bankDeposit("town_spawn", playerUuid, new BigDecimal("100"));
+    bank.setBankMemberPermission("town_spawn", memberUuid, AccountPermission.DEPOSIT, true);
+});
+```
+
+## How do I use multiple currencies?
+
+```java
+Conduit.getRegistry().getProvider(MultiCurrencyEconomy.class).ifPresent(multi -> {
+    Currency gems = multi.supportedCurrencies().stream()
+        .filter(c -> c.id().equals("gems")).findFirst().orElseThrow();
+    multi.deposit(uuid, new BigDecimal("5"), gems);
+});
+```
+
+## How do I read transaction history?
+
+```java
+Conduit.getRegistry().getProvider(TransactionalEconomy.class).ifPresent(txnEco -> {
+    txnEco.getTransactionHistory(uuid, TransactionFilter.recent(20))
+        .thenAccept(list -> { /* render statement */ });
+});
+```
+
+## How do I make a payout that is safe to retry (exactly-once)?
+
+Use the idempotent variants with a stable `operationId`:
+
+```java
+UUID opId = deterministicIdFor(payout);   // same id for the same logical payout
+txnEco.depositIdempotent(uuid, amount, opId)
+    .thenAccept(result -> { /* re-submitting opId returns the original result */ });
+```
+
+Re-submitting the same `opId` with the same parameters returns the original result without double-paying. Different parameters under the same `opId` fail with `IdempotencyMismatchException`. See [Extension Interfaces](/docs/extension-interfaces).
+
+## How do I build a leaderboard?
+
+```java
+Conduit.getRegistry().getProvider(LeaderboardEconomy.class).ifPresent(board -> {
+    board.getTopBalances(10).thenAccept(top -> {
+        for (RankedBalance rb : top) {
+            // rb.rank(), rb.owner(), rb.amount()
+        }
+    });
+});
+```
+
+## How do I attach analytics tags to a transaction?
+
+Use the `TransactionBuilder`:
+
+```java
+economy.transaction()
+    .withdraw(uuid, price)
+    .reason("shop purchase")
+    .metadata("shop_id", "spawn-market")
+    .metadata("item_id", "diamond_sword")
+    .execute()
+    .thenAccept(result -> { /* ... */ });
+```
+
+The metadata rides along on the `Transaction` and is visible to event listeners.
+
+## How do I degrade gracefully when a feature is missing?
+
+Branch on presence and hide the feature:
+
+```java
+boolean banks = Conduit.getRegistry().getProvider(BankingEconomy.class).isPresent();
+if (banks) registerBankCommands(); else getLogger().info("Active economy has no banks; bank UI disabled.");
+```
+
+## How do I do a Bukkit action (message, item) from an async callback?
+
+Marshal back to the main/region thread first:
+
+```java
+economy.deposit(uuid, amount, "reward").thenAccept(result -> {
+    getServer().getScheduler().runTask(this, () -> {
+        Player p = getServer().getPlayer(uuid);
+        if (p != null) p.sendMessage("You received " + economy.format(amount));
+    });
+});
+```
+
+On Folia, use the appropriate region/entity scheduler instead of the global scheduler.
+
+## How do I handle "no economy installed" cleanly?
+
+```java
+Optional<Economy> maybe = Conduit.findEconomy();
+if (maybe.isEmpty()) {
+    getLogger().warning("No economy provider installed; economy features disabled.");
+    return;
+}
+```
+
+Or set `required: false` in `paper-plugin.yml` and feature-gate at runtime.

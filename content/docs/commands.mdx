@@ -1,0 +1,56 @@
+---
+title: "Commands"
+description: "The /conduit admin command surface."
+---
+
+Conduit ships an admin command surface under `/conduit`. These commands operate against the **active** economy provider, so what works depends on what that provider supports (see [Capabilities](/docs/capabilities) and [Extension Interfaces](/docs/extension-interfaces)).
+
+> Command availability and exact flags can vary by Conduit build. Run `/conduit help` on your server for the authoritative list. The surface below reflects the documented design.
+
+## Economy administration
+
+```
+/conduit economy balance <player> [currency]
+/conduit economy give <player> <amount> [currency] [--reason "text"]
+/conduit economy take <player> <amount> [currency] [--reason "text"]
+/conduit economy set <player> <amount> [currency] [--reason "text"]
+/conduit economy reset <player>
+/conduit economy top [currency] [page]
+/conduit economy history <player> [limit]
+```
+
+- **balance**: read a player's balance. With a `currency` argument, reads that currency (requires a multi-currency provider).
+- **give / take / set**: adjust a balance. `give` deposits, `take` withdraws, `set` overwrites. The optional `--reason` is recorded on the transaction and surfaces in events and history.
+- **reset**: set the player back to the provider's default starting balance (or zero).
+- **top**: leaderboard. Requires a provider implementing `LeaderboardEconomy`; otherwise the command reports that the active provider does not support leaderboards.
+- **history**: transaction history. Requires a provider implementing `TransactionalEconomy`.
+
+All monetary arguments are parsed as `BigDecimal`. An amount whose scale exceeds the currency's decimal places, or a negative/zero magnitude where a positive one is required, is rejected with a clear message rather than silently truncated.
+
+## Migration / conversion
+
+```
+/conduit economy convert <fromEconomy> <toEconomy> [--dry-run] [--world <world>] [--batch-size 500]
+```
+
+Converts balances from one registered economy to another. It runs **asynchronously in batches** with progress reporting. Always start with `--dry-run`, which previews the conversion (how many accounts, totals) without committing anything. See [Migrating from Vault](/docs/migration-from-vault) for the recommended workflow.
+
+## Status and diagnostics
+
+```
+/conduit            # overview: active provider, version, capabilities
+/conduit help       # list commands
+/conduit reload     # re-read config.yml (if supported by your build)
+```
+
+Use the overview command to confirm which provider is active, which extension interfaces it implements (banking, multi-currency, transactional, leaderboard), and which fine-grained capabilities it advertises. This is the fastest way to answer "why doesn't `/conduit economy top` work" (the provider likely is not a `LeaderboardEconomy`).
+
+## Permissions
+
+Conduit's admin commands are intended for operators. Grant the `conduit.*` permission node family (or the specific subcommand nodes your build defines) only to staff. The exact node names are listed by `/conduit help` and in `paper-plugin.yml`.
+
+## Safety notes
+
+- `set` and `reset` are destructive. Prefer `give`/`take` with a `--reason` when you want an auditable adjustment.
+- `convert` without `--dry-run` writes to the destination economy. Back up first and dry-run always.
+- Because operations are async, large bulk actions (convert, mass adjustments) do not freeze the server tick.

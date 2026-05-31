@@ -1,0 +1,86 @@
+---
+title: "Troubleshooting"
+description: "Common problems and their fixes."
+---
+
+## "No economy provider" / consumers find nothing
+
+**Cause:** Conduit is installed but no provider or bridge registered. Conduit itself stores no money.
+
+**Fix:** install an economy plugin that implements Conduit, or a bridge for the economy plugin you run (for example EssentialsX plus the EssentialsX bridge). Confirm with the `/conduit` overview command that an active provider is listed.
+
+## Conduit will not load
+
+**Symptoms:** the plugin fails to enable or the server rejects it.
+
+**Checks:**
+- Java 25? Conduit requires it. Older Java will not load it.
+- Paper/Folia on Minecraft 26.1+? Older server software or game versions are unsupported.
+- Look for the actual stack trace in the server log; an `UnsupportedClassVersionError` means wrong Java.
+
+## `IllegalStateException: Conduit runtime is not initialised`
+
+**Cause:** you called `Conduit.getRegistry()` / `getEconomy()` before Conduit enabled (or after it disabled).
+
+**Fix:** do not resolve the economy in static initializers or very early bootstrap. Use `Conduit.whenProviderAvailable(...)`, or guard with `Conduit.isInitialized()`. Declare Conduit as a `load: BEFORE` dependency in your `paper-plugin.yml`.
+
+## `ProviderNotFoundException`
+
+**Cause:** `Conduit.getEconomy()` (or `requireProvider`) was called when no provider is registered.
+
+**Fix:** use `findEconomy()` (returns `Optional`) or `whenProviderAvailable(...)` if an economy might be absent, and feature-gate accordingly.
+
+## `IllegalArgumentException` on deposit/withdraw/transfer
+
+**Cause:** you passed an invalid amount. Amounts must be positive magnitudes; scale must not exceed the currency's decimal places.
+
+**Fix:**
+- Do not pass negative or zero to `deposit`/`withdraw`/`transfer` (use the method name for direction).
+- Round to the currency's `decimalPlaces()` before calling. A 2-decimal currency rejects `1.234`.
+- Note this throws **synchronously**, not via the future, because it is a programming error. A `.exceptionally(...)` on the future will not catch it; fix the call site.
+
+## `CapabilityNotSupportedException`
+
+**Cause:** you called a capability-gated method (for example `canWithdraw`) on a provider that does not advertise that capability.
+
+**Fix:** check `economy.supports(Capability.ECONOMY_PREFLIGHT)` first, or branch on `InsufficientFunds` instead of preflighting. See [Capabilities](/docs/capabilities).
+
+## `IdempotencyMismatchException`
+
+**Cause:** you re-submitted an `operationId` with different parameters than the original call. This is corruption detection.
+
+**Fix:** ensure each logical operation has a stable, unique `operationId`, and that re-submissions use identical parameters (`amount`, accounts, currency). See [Extension Interfaces](/docs/extension-interfaces).
+
+## My transactions are attributed to "anonymous"
+
+**Cause:** no `CallerToken` bound, or you crossed an executor boundary that dropped it.
+
+**Fix:** `registry.registerCaller(this)` once, wrap calls in `CallerToken.runWith(token, ...)`, and rebind (or use `CallerToken.propagating(executor)`) when continuing on your own executor. See [Caller Identity](/docs/caller-identity).
+
+## `IllegalStateException` mentioning `MultiCurrencyEconomy` from the `TransactionBuilder`
+
+**Cause:** you called `.currency(...)` on a builder bound to an economy handle that is not a `MultiCurrencyEconomy`.
+
+**Fix:** only use `.currency(...)` when the active provider implements `MultiCurrencyEconomy`. Check with `getProvider(MultiCurrencyEconomy.class)` first.
+
+## `/conduit economy top` or `history` says "not supported"
+
+**Cause:** the active provider does not implement `LeaderboardEconomy` (for `top`) or `TransactionalEconomy` (for `history`).
+
+**Fix:** this is expected behavior, not a bug. Those features depend on the provider. Use the `/conduit` overview to see which extension interfaces the active provider implements.
+
+## Bukkit calls from a future callback throw "not on main thread"
+
+**Cause:** future callbacks run off the main thread. Touching the world or sending messages there is illegal.
+
+**Fix:** marshal back to the main/region thread first (global scheduler on Paper, region/entity scheduler on Folia) before any Bukkit API call. See the recipe in [How-To](/docs/how-to).
+
+## Two providers, the wrong one is active
+
+**Cause:** priority resolution picked the other one.
+
+**Fix:** set `economy.provider-override` to the provider's `getName()` in `config.yml`, then reload/restart. Confirm with `/conduit`. See [Configuration](/docs/configuration).
+
+## Still stuck?
+
+Open an issue on [GitHub](https://github.com/alazso/Conduit/issues) with your server version, Java version, Conduit version, the installed provider/bridge, and the full stack trace.

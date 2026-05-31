@@ -1,0 +1,101 @@
+---
+title: "Testing & Conformance"
+description: "Conformance fixtures and MockEconomy for tests."
+---
+
+Conduit ships a `conduit-test-fixtures` module so provider and bridge authors can prove their implementation behaves like every other Conduit economy. Consumers can use the same fixtures to test their plugins against a real, in-memory economy.
+
+## What is in `conduit-test-fixtures`
+
+| Class (package `so.alaz.conduit.testing`) | Purpose |
+|---|---|
+| `MockEconomy` | A full in-memory economy implementing `BankingEconomy`, `MultiCurrencyEconomy`, and `TransactionalEconomy`. Operations complete synchronously. |
+| `AbstractEconomyConformanceTest` | Base test enforcing core `Economy` domain behavior. |
+| `AbstractBankingEconomyConformanceTest` | Banking contract. |
+| `AbstractMultiCurrencyEconomyConformanceTest` | Multi-currency contract. |
+| `AbstractTransactionalEconomyConformanceTest` | History + idempotency contract. |
+
+The framework is JUnit 5 with AssertJ.
+
+## Testing a provider against conformance
+
+Extend the relevant base class and supply a fresh instance:
+
+```java
+class MyEconomyConformanceTest extends AbstractEconomyConformanceTest {
+    @Override
+    protected Economy createEconomy() {
+        return new MyEconomy(/* fresh, isolated state per test */);
+    }
+}
+```
+
+The base class runs a battery of tests: deposits, withdrawals, transfers, balance queries, account lifecycle, and the correct `EconomyResult` cases (for example `InsufficientFunds` on overdraft). If your provider also implements banking, multi-currency, or transactional behavior, extend those base classes too:
+
+```java
+class MyEconomyBankingConformanceTest extends AbstractBankingEconomyConformanceTest {
+    @Override protected BankingEconomy createBankingEconomy() { return new MyEconomy(); }
+}
+```
+
+Green conformance is the quality bar for shipping a provider or bridge.
+
+### What conformance does and does not check
+
+It checks **provider domain behavior**: that your storage and balance logic are correct and that you return the right result cases. It does **not** check amount validation, event firing, or interceptors, because those belong to the dispatch layer that `conduit-core` wraps around your provider, not to the provider itself. Do not add re-validation to pass tests; the suite does not expect it.
+
+## Using `MockEconomy` in your consumer tests
+
+`MockEconomy` is the easiest way to test a plugin that consumes an economy:
+
+```java
+MockEconomy economy = MockEconomy.builder()
+    .name("Test")
+    .withCurrency("coins", "$", 2)
+    .withAccount(playerUuid, new BigDecimal("500.00"))
+    .build();
+
+economy.withdraw(playerUuid, new BigDecimal("100.00")).join();   // join() is fine in tests
+assertThat(economy.getBalance(playerUuid).join().amount())
+    .isEqualByComparingTo("400.00");
+```
+
+Builder options: `name(...)`, `withCurrency(id, symbol, decimalPlaces)` or `withCurrency(Currency)`, `withAccount(uuid, amount)`, `withCapabilities(Set<Capability>)`. By default it advertises all capabilities; restrict them to test your graceful-degradation paths.
+
+## Testing through the static facade
+
+If your code calls `Conduit.getEconomy()` / `Conduit.whenProviderAvailable(...)`, you need a live registry. The registry implementation lives in `conduit-core`, so facade-level tests belong in a module that can see both `conduit-core` and `conduit-test-fixtures` (the `conduit-core` test source set is the canonical place). The pattern:
+
+```java
+@BeforeEach
+void setUp() {
+    registry = new ProviderRegistryImpl(new RecordingEventPublisher(), new InterceptorBus());
+    Conduit.init(registry);
+    registry.register(Economy.class, MockEconomy.builder().withCurrency("coins","$",2).build(),
+        TestPlugins.named("Test"), ServicePriority.Normal);
+}
+
+@AfterEach
+void tearDown() {
+    Conduit.shutdown();   // clear the static registry between tests
+}
+```
+
+`Conduit.init(...)` / `Conduit.shutdown()` are internal lifecycle hooks intended for `conduit-core` and tests. Always `shutdown()` in teardown to avoid leaking global state across tests.
+
+> Dependency note: do not make `conduit-api`'s own test source depend on `conduit-test-fixtures`. The fixtures depend on `conduit-api`, so that would create a circular project dependency. Pure API-level tests (model, results, currency formatting) live in `conduit-api`; anything needing a registry + mock economy lives in `conduit-core`.
+
+## Asserting on async results
+
+Because fixtures complete synchronously, `.join()` is safe and idiomatic in tests:
+
+```java
+EconomyResult r = economy.deposit(uuid, new BigDecimal("10.00")).join();
+assertThat(r).isInstanceOf(EconomyResult.Success.class);
+```
+
+For real async providers in integration tests, prefer awaiting with a timeout to avoid hanging the suite.
+
+## Coverage
+
+The `conduit-core` module enforces a JaCoCo instruction-coverage gate; runtime-only classes that need a live server (the plugin entry point, schedulers, the metrics and command surfaces) are excluded from the gate. `conduit-api` has no gate of its own. Keep new domain logic covered; do not chase coverage on classes that require a live server.

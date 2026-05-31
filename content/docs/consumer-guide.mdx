@@ -1,0 +1,190 @@
+---
+title: "Consumer Guide"
+description: "Use an economy from your plugin: deposit, withdraw, transfer, events."
+---
+
+This guide is for plugin developers who want to spend, check, or move money: shops, jobs, rewards, casinos, quests, anything that consumes an economy. If you are implementing the economy itself, see the [Provider Guide](/docs/provider-guide).
+
+## 1. Depend on the API
+
+Add `conduit-api` as a **`compileOnly`** dependency. The actual classes are provided at runtime by the installed Conduit plugin, so you never bundle them.
+
+```kotlin
+repositories {
+    maven("https://repo.alaz.so/releases")
+}
+
+dependencies {
+    compileOnly("so.alaz.conduit:conduit-api:0.2.3")
+}
+```
+
+Declare Conduit as a dependency in your `paper-plugin.yml`:
+
+```yaml
+name: MyPlugin
+version: "1.0.0"
+main: com.example.MyPlugin
+api-version: "26.1"
+dependencies:
+  server:
+    Conduit:
+      load: BEFORE
+      required: true   # use false if your plugin should still load without an economy
+```
+
+## 2. Resolve the economy
+
+You almost never need the `onEnable` dance Vault forced on you. Use `whenProviderAvailable`: it runs your code as soon as a provider exists, whether that is before or after your plugin enables.
+
+```java
+import so.alaz.conduit.api.Conduit;
+import so.alaz.conduit.api.economy.Economy;
+
+Conduit.whenProviderAvailable(Economy.class, economy -> {
+    // economy is ready and dispatch-decorated (validation + events + interceptors)
+});
+```
+
+Other resolution options:
+
+```java
+Conduit.getEconomy();      // active Economy, or throws ProviderNotFoundException
+Conduit.findEconomy();     // Optional<Economy>, empty if none registered
+Conduit.isInitialized();   // false before Conduit enables / after it disables
+```
+
+Use `getEconomy()` when an economy is mandatory and you want to fail loudly. Use `findEconomy()` when you can degrade gracefully. Use `whenProviderAvailable(...)` in startup paths to avoid any ordering assumptions.
+
+## 3. Move money and handle the result
+
+Every mutation returns `CompletableFuture<EconomyResult>`. `EconomyResult` is sealed, so you handle each case explicitly.
+
+```java
+import so.alaz.conduit.api.result.EconomyResult;
+import java.math.BigDecimal;
+
+economy.deposit(playerUuid, new BigDecimal("100.00"), "daily reward")
+    .thenAccept(result -> {
+        switch (result) {
+            case EconomyResult.Success s ->
+                getLogger().info("New balance: " + economy.format(s.newBalance()));
+            case EconomyResult.InsufficientFunds f ->
+                getLogger().warning("Had " + f.balance() + ", needed " + f.requested());
+            case EconomyResult.AccountNotFound nf ->
+                getLogger().warning("No account for " + nf.uuid());
+            case EconomyResult.CurrencyNotSupported c ->
+                getLogger().warning("Unsupported currency: " + c.currency().id());
+            case EconomyResult.Rejected r ->
+                getLogger().info("Vetoed by policy: " + r.reason());
+            case EconomyResult.ProviderError e ->
+                getLogger().severe("Backend error: " + e.message());
+        }
+    });
+```
+
+If you only care about success:
+
+```java
+economy.deposit(uuid, amount, "reward")
+    .thenAccept(r -> r.ifSuccess(s ->
+        player.sendMessage("You received " + economy.format(amount))));
+```
+
+`r.success()` returns `Optional<EconomyResult.Success>` if you prefer that style.
+
+### Reducing boilerplate in your own plugin
+
+The resolve-and-handle pattern is worth wrapping **once** in your plugin so call sites stay short. Keep the wrapper async and `BigDecimal` (never add a blocking or `double` variant):
+
+```java
+public final class Econ {
+    public static CompletableFuture<EconomyResult> deposit(UUID uuid, BigDecimal amount, String reason) {
+        CompletableFuture<EconomyResult> out = new CompletableFuture<>();
+        Conduit.whenProviderAvailable(Economy.class, economy ->
+            economy.deposit(uuid, amount, reason).whenComplete((r, err) -> {
+                if (err != null) out.completeExceptionally(err); else out.complete(r);
+            }));
+        return out;
+    }
+}
+```
+
+Then call `Econ.deposit(uuid, amount, "reward").thenAccept(...)` everywhere.
+
+## 4. The operations you have
+
+On the base `Economy`:
+
+| Operation | Returns | Notes |
+|---|---|---|
+| `hasAccount(uuid)` | `CompletableFuture<Boolean>` | |
+| `createAccount(uuid)` / `deleteAccount(uuid)` | `EconomyResult` | |
+| `getBalance(uuid)` | `CompletableFuture<Balance>` | `Balance(owner, currency, amount)` |
+| `getBalances(collection)` | `CompletableFuture<Map<UUID,Balance>>` | batch read |
+| `deposit(uuid, amount[, reason])` | `EconomyResult` | amount > 0 |
+| `withdraw(uuid, amount[, reason])` | `EconomyResult` | amount > 0 |
+| `set(uuid, amount)` | `EconomyResult` | amount >= 0 |
+| `transfer(from, to, amount[, reason])` | `EconomyResult` | atomic, amount > 0 |
+| `canDeposit/canWithdraw(uuid, amount)` | `CompletableFuture<Boolean>` | requires `ECONOMY_PREFLIGHT` |
+| `format(amount)` | `String` | currency-aware formatting |
+
+**Prefer `transfer` over manual withdraw-then-deposit.** `transfer` is atomic: the classic "withdraw succeeded, deposit failed, money vanished" bug cannot happen.
+
+## 5. Use capabilities before calling gated methods
+
+```java
+import so.alaz.conduit.api.capability.Capability;
+
+if (economy.supports(Capability.ECONOMY_PREFLIGHT)) {
+    economy.canWithdraw(uuid, price).thenAccept(ok -> { /* ... */ });
+}
+```
+
+For structural features, ask the registry:
+
+```java
+import so.alaz.conduit.api.economy.BankingEconomy;
+
+Conduit.getRegistry().getProvider(BankingEconomy.class)
+    .ifPresent(bank -> bank.getBankBalance("spawn_bank").thenAccept(...));
+```
+
+See [Capabilities](/docs/capabilities) and [Extension Interfaces](/docs/extension-interfaces).
+
+## 6. React to money movement with events
+
+Conduit fires post-commit events. Listen to them like any Bukkit event:
+
+```java
+@EventHandler
+public void onTxn(EconomyTransactionEvent event) {
+    Transaction t = event.transaction();
+    // analytics, logging, quest progress, achievements...
+}
+```
+
+Events are **non-cancellable**: the money already moved. To **block** an operation before it happens, register an [interceptor](/docs/events-and-interceptors) instead.
+
+## 7. Attribute your plugin (optional but recommended)
+
+Bind a `CallerToken` so events and audits know the money came from you:
+
+```java
+CallerToken token = Conduit.getRegistry().registerCaller(this); // once, in onEnable
+CallerToken.runWith(token, () -> economy.deposit(uuid, amount, "shop sale"));
+```
+
+Without this, your transactions are attributed to `CallerToken.ANONYMOUS`. See [Caller Identity](/docs/caller-identity) for the threading rules.
+
+## 8. Threading reminders
+
+- Continuations on the default `CompletableFuture` executor are fine; do not block them with `.join()` in production.
+- If you hop to your own executor with `thenApplyAsync(fn, myExecutor)`, the `CallerToken` does **not** propagate automatically. Rebind with `CallerToken.runWith(...)` or use `CallerToken.propagating(executor)`.
+- Bukkit API calls (sending messages, world edits) must happen on the main/region thread. Marshal back with your scheduler before touching the world from a future callback.
+
+## Where to next
+
+- [How-To Recipes](/docs/how-to): concrete "how do I X" answers.
+- [Migrating from Vault](/docs/migration-from-vault): side-by-side porting.
+- [API Reference](/docs/api-reference): every type at a glance.

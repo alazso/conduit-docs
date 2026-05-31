@@ -1,0 +1,63 @@
+---
+title: "Configuration"
+description: "Every config.yml key, explained."
+---
+
+Conduit's behavior is intentionally small, because most behavior comes from the active economy provider. The file lives at `plugins/Conduit/config.yml` and is generated on first start.
+
+## The full config
+
+```yaml
+# Conduit configuration.
+# Conduit is an economy abstraction layer; most behaviour comes from the active
+# economy provider. These settings control Conduit's own runtime features.
+
+update-checker:
+  # Query GitHub on startup for a newer Conduit release and log an advisory.
+  enabled: true
+
+metrics:
+  # Anonymous usage metrics. Disabled by default; you opt in.
+  enabled: false
+
+economy:
+  # Force a specific economy provider by name, regardless of registration
+  # priority. Leave empty for automatic (highest-priority) selection.
+  provider-override: ""
+```
+
+> Note: the exact metrics keys depend on your Conduit build (the project is migrating its metrics backend). The `enabled: false` opt-in default is stable: Conduit does not send anything unless you turn it on.
+
+## Keys explained
+
+### `update-checker.enabled`
+When `true`, Conduit makes a single async request to GitHub Releases on startup and logs a message if a newer version is available. It never blocks startup and never repeats per player. Set `false` to disable entirely (recommended for air-gapped servers).
+
+### `metrics.enabled`
+Anonymous usage metrics, **off by default**. You opt in by setting `true`. Conduit sends nothing while this is `false`.
+
+### `economy.provider-override`
+The name of the economy provider to force active, regardless of registration priority. The name matches `Economy.getName()` as reported by the provider.
+
+- Leave empty (`""`) for automatic selection (highest `ServicePriority`, then earliest registration).
+- Set to a provider name (for example `"EssentialsX"`) to pin it.
+- If the named provider is not registered, Conduit falls back to automatic selection and logs a warning.
+
+This is the operator-facing equivalent of the registry's override mechanism. It is the right tool when two providers are installed and you want a specific one to win.
+
+## Applying changes
+
+Most keys are read at startup. After editing the config:
+
+- Restart the server, or
+- Use the reload command if your Conduit build exposes one (see [Commands](/docs/commands)).
+
+`economy.provider-override` changes take effect when the override is re-applied (reload or restart); switching the active provider fires an `ActiveProviderChangeEvent` so consumer plugins can react.
+
+## What is *not* configured here
+
+- Currency names, symbols, and decimal places: defined by the **provider**, not by Conduit.
+- Starting balances, interest, taxes: provider or other plugins.
+- Per-command permissions: see [Commands](/docs/commands).
+
+Conduit deliberately does not own these. It is the contract, not the economy.

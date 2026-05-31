@@ -1,0 +1,170 @@
+---
+title: "API Reference"
+description: "A condensed map of the conduit-api surface."
+---
+
+A condensed map of `conduit-api`. This is a quick reference, not a substitute for the Javadoc. Package root: `so.alaz.conduit.api`.
+
+## Entry point: `Conduit`
+
+| Member | Signature | Notes |
+|---|---|---|
+| `API_VERSION` | `String` (`"1.0"`) | API version this runtime ships |
+| `isInitialized()` | `boolean` | runtime up? |
+| `getRegistry()` | `ProviderRegistry` | throws `IllegalStateException` if not initialized |
+| `getEconomy()` | `Economy` | throws `ProviderNotFoundException` if none |
+| `findEconomy()` | `Optional<Economy>` | empty if none |
+| `whenProviderAvailable(Class<T>, Consumer<T>)` | `void` | order-insensitive |
+
+`init(...)` / `shutdown()` are `@ApiStatus.Internal` (called by `conduit-core`).
+
+## `economy.Economy` (extends `Capable`)
+
+```java
+String getName();
+Currency defaultCurrency();
+default String requiredApiVersion();           // "1.0"
+
+CompletableFuture<Boolean> hasAccount(UUID);
+CompletableFuture<EconomyResult> createAccount(UUID);
+CompletableFuture<EconomyResult> deleteAccount(UUID);
+CompletableFuture<EconomyResult> renameAccount(UUID, String);
+CompletableFuture<Set<UUID>> accountsWithOwnerOf(UUID);
+CompletableFuture<Set<UUID>> accountsWithMembershipTo(UUID);
+CompletableFuture<Set<UUID>> accountsWithAccessTo(UUID);
+
+CompletableFuture<Balance> getBalance(UUID);
+default CompletableFuture<Map<UUID, Balance>> getBalances(Collection<UUID>);
+
+@RequiresCapability(ECONOMY_PREFLIGHT) CompletableFuture<Boolean> canDeposit(UUID, BigDecimal);
+@RequiresCapability(ECONOMY_PREFLIGHT) CompletableFuture<Boolean> canWithdraw(UUID, BigDecimal);
+
+CompletableFuture<EconomyResult> deposit(UUID, BigDecimal);
+CompletableFuture<EconomyResult> deposit(UUID, BigDecimal, String reason);
+CompletableFuture<EconomyResult> withdraw(UUID, BigDecimal);
+CompletableFuture<EconomyResult> withdraw(UUID, BigDecimal, String reason);
+CompletableFuture<EconomyResult> set(UUID, BigDecimal);
+CompletableFuture<EconomyResult> transfer(UUID from, UUID to, BigDecimal);
+CompletableFuture<EconomyResult> transfer(UUID from, UUID to, BigDecimal, String reason);
+
+default String format(BigDecimal);
+default TransactionBuilder transaction();
+```
+
+## Extension interfaces (`economy.*`, each `extends Economy`)
+
+- `BankingEconomy`: banks, members, granular `AccountPermission`.
+- `MultiCurrencyEconomy`: `supportedCurrencies`, currency-bearing overloads.
+- `TransactionalEconomy`: history + `*Idempotent` mutations.
+- `LeaderboardEconomy`: `getTopBalances`.
+
+See [Extension Interfaces](/docs/extension-interfaces) for full signatures.
+
+## Results (`result.*`)
+
+```java
+sealed interface EconomyResult permits Success, InsufficientFunds, AccountNotFound,
+        CurrencyNotSupported, Rejected, ProviderError {
+    boolean isSuccess();
+    Optional<Success> success();
+    EconomyResult ifSuccess(Consumer<Success>);
+}
+record Success(UUID account, Currency currency, BigDecimal newBalance, @Nullable Transaction transaction)
+record InsufficientFunds(BigDecimal balance, BigDecimal requested, Currency currency)
+record AccountNotFound(UUID uuid)
+record CurrencyNotSupported(Currency currency)
+record Rejected(String reason)
+record ProviderError(String message, @Nullable Throwable cause)
+```
+
+```java
+sealed interface OperationResult permits Success, Failure {
+    boolean isSuccess();
+    void orThrow();                 // throws OperationException on failure
+    static OperationResult success();
+    static OperationResult failure(String reason);
+    static OperationResult failure(String reason, Throwable cause);
+}
+
+sealed interface Result<T> permits Success<T>, Failure<T> { /* getOrThrow, getOrDefault, toOptional */ }
+```
+
+## Model (`model.*`)
+
+```java
+record Balance(UUID owner, Currency currency, BigDecimal amount) { boolean isNegative(); }
+
+interface Currency {
+    String id(); String singularName(); String pluralName(); String symbol();
+    int decimalPlaces(); boolean isDefault(); String format(BigDecimal amount);
+}
+record SimpleCurrency(...) implements Currency {
+    static SimpleCurrency ofDefault(String id, String symbol, int decimalPlaces);
+}
+
+record Transaction(UUID id, TransactionType type, @Nullable UUID actor, UUID target,
+        Currency currency, BigDecimal amount, BigDecimal balanceBefore, BigDecimal balanceAfter,
+        @Nullable String reason, Map<String,String> metadata, Instant timestamp)
+
+record RankedBalance(int rank, UUID owner, Currency currency, BigDecimal amount)
+record TransactionFilter(@Nullable TransactionType type, @Nullable Currency currency,
+        @Nullable Instant after, @Nullable Instant before, int limit) {
+    static TransactionFilter recent(int limit);
+}
+
+enum TransactionType { DEPOSIT, WITHDRAWAL, TRANSFER_IN, TRANSFER_OUT,
+        BANK_DEPOSIT, BANK_WITHDRAWAL, ADMIN_SET, SYSTEM }
+enum AccountPermission { BALANCE, DEPOSIT, WITHDRAW, TRANSFER, OWNER, ALL; boolean includes(AccountPermission); }
+enum AccountEventType { CREATED, DELETED }
+```
+
+## Capabilities (`capability.*`)
+
+```java
+enum Capability { ECONOMY_OFFLINE_PLAYERS, ECONOMY_FRACTIONAL_BALANCES, ECONOMY_PREFLIGHT }
+interface Capable { Set<Capability> capabilities(); default boolean supports(Capability); }
+@interface RequiresCapability { Capability value(); }
+```
+
+## Registry (`registry.*`)
+
+```java
+interface ProviderRegistry {
+    <T> Optional<T> getProvider(Class<T>);
+    <T> T requireProvider(Class<T>);            // throws ProviderNotFoundException
+    <T> List<T> getProviders(Class<T>);
+    <T> ProviderInfo<T> getProviderInfo(Class<T>);
+    <T> void register(Class<T>, T, Plugin, ServicePriority);
+    <T> void unregister(Class<T>, T);
+    <T> void whenProviderAvailable(Class<T>, Consumer<T>);
+    CallerToken registerCaller(Plugin);
+    void registerInterceptor(EconomyTransactionInterceptor, Plugin, ServicePriority);
+    void unregisterInterceptor(EconomyTransactionInterceptor);
+}
+record ProviderInfo<T>(Optional<T> activeProvider, List<T> allProviders,
+        @Nullable ServicePriority activePriority, @Nullable Plugin activeRegistrant)
+```
+
+## Caller (`caller.CallerToken`)
+
+```java
+static final CallerToken ANONYMOUS;
+static void runWith(CallerToken, Runnable);
+static <T> T callWith(CallerToken, Callable<T>) throws Exception;
+static CallerToken current();
+static Runnable wrapping(Runnable);
+static Executor propagating(Executor);
+Plugin plugin(); String pluginName(); UUID tokenId();
+```
+
+## Events (`event.*`)
+
+`EconomyTransactionEvent`, `EconomyAccountEvent`, `ProviderRegisterEvent`, `ProviderUnregisterEvent`, `ActiveProviderChangeEvent`, and the functional `EconomyTransactionInterceptor`. See [Events & Interceptors](/docs/events-and-interceptors).
+
+## Exceptions (`exception.*`)
+
+`ProviderNotFoundException`, `CapabilityNotSupportedException`, `OperationException`, `IdempotencyMismatchException`. All unchecked.
+
+## Provider support (`economy.support.*`)
+
+`AbstractEconomyProvider` (scaffolding), `IdempotencyStore` (idempotency helper).

@@ -1,0 +1,85 @@
+---
+title: "Caller Identity"
+description: "Attribute operations to the calling plugin with CallerToken."
+---
+
+Conduit attributes every economy operation to the plugin that initiated it. This replaces Vault's honor-system `String pluginName` parameter (spoofable, unattributable) with a real, bound identity that propagates through async work.
+
+## Why it matters
+
+- **Audit:** `EconomyTransactionEvent.caller()` tells analytics and logs which plugin moved the money.
+- **Abuse detection:** a rogue plugin draining accounts is identifiable.
+- **Metering:** per-plugin economy usage becomes measurable.
+
+## Getting a token
+
+Each plugin obtains a token **once**, at startup, tied to its identity:
+
+```java
+CallerToken token = Conduit.getRegistry().registerCaller(this); // this = your Plugin
+```
+
+`registerCaller` is idempotent: calling it again returns the same logical token for your plugin.
+
+## Binding a token at the call site
+
+Bind the token for the duration of an operation with `runWith` (no return value) or `callWith` (returns a value):
+
+```java
+CallerToken.runWith(token, () -> economy.deposit(uuid, amount, "shop sale"));
+```
+
+```java
+CompletableFuture<EconomyResult> future =
+    CallerToken.callWith(token, () -> economy.deposit(uuid, amount, "shop sale"));
+```
+
+`current()` reads the bound token anywhere up the stack, returning `CallerToken.ANONYMOUS` if nothing is bound:
+
+```java
+CallerToken who = CallerToken.current();  // ANONYMOUS if unbound
+```
+
+## How propagation works
+
+`CallerToken` is built on Java 25 `ScopedValue`. It propagates into async work **only through scope-aware dispatch**. Conduit's internal executor is scope-aware, so framework-dispatched continuations carry the token correctly.
+
+```java
+// Token propagates: continuation runs on Conduit's executor.
+future.thenApply(fn);
+```
+
+```java
+// Token does NOT propagate: you hopped to your own executor.
+future.thenApplyAsync(fn, myOwnExecutor);   // current() == ANONYMOUS on myOwnExecutor
+```
+
+If you must continue on an external executor and want attribution preserved, rebind manually or wrap the executor:
+
+```java
+// Option A: rebind inside the continuation
+future.thenApplyAsync(v -> CallerToken.callWith(token, () -> fn.apply(v)), myExecutor);
+
+// Option B: wrap the executor / runnable so the token rides along
+Executor propagating = CallerToken.propagating(myExecutor);
+Runnable carried = CallerToken.wrapping(() -> doWork());
+```
+
+## Anonymous is fine, just visible
+
+A plugin that never binds a token is not broken: its operations are attributed to `CallerToken.ANONYMOUS`. That is detectable and loggable, not a hard failure. Binding is recommended so your transactions are properly attributed, but it is not mandatory to function.
+
+## Accessors
+
+```java
+token.plugin();      // the Plugin, or null for ANONYMOUS
+token.pluginName();  // "anonymous" for ANONYMOUS, else your plugin name
+token.tokenId();     // a stable UUID for this token
+```
+
+## Guidance
+
+- Call `registerCaller(this)` once in `onEnable`, store the token.
+- Wrap your economy calls in `runWith`/`callWith`.
+- Watch executor boundaries: rebind when you leave Conduit's executor.
+- Providers and interceptors should **read** `current()` for attribution and logging, not for policy decisions that belong in interceptors.
