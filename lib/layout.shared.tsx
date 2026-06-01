@@ -4,17 +4,7 @@ import { appName, gitConfig } from './shared';
 export function baseOptions(): BaseLayoutProps {
   return {
     nav: {
-      title: (
-        <>
-          <span
-            aria-hidden
-            className="inline-flex size-6 items-center justify-center rounded-md bg-fd-primary text-sm font-bold text-fd-primary-foreground shadow-sm"
-          >
-            ⚡
-          </span>
-          <span className="text-gradient font-bold tracking-tight">{appName}</span>
-        </>
-      ),
+      title: <span className="text-gradient font-bold tracking-tight">{appName}</span>,
       transparentMode: 'top',
     },
     links: [
