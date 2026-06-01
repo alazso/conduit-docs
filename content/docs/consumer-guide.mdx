@@ -15,9 +15,23 @@ repositories {
 }
 
 dependencies {
-    compileOnly("so.alaz.conduit:conduit-api:0.2.3")
+    compileOnly("so.alaz.conduit:conduit-api:CONDUIT_VERSION")
 }
 ```
+
+<Callout type="info" title="Want the latest beta?">
+Pre-release builds are published as snapshots in a separate repository. To use the bleeding-edge `CONDUIT_SNAPSHOT_VERSION` build, point at the snapshots repo instead:
+
+```kotlin
+repositories {
+    maven("https://repo.alaz.so/snapshots")
+}
+
+dependencies {
+    compileOnly("so.alaz.conduit:conduit-api:CONDUIT_SNAPSHOT_VERSION")
+}
+```
+</Callout>
 
 Declare Conduit as a dependency in your `paper-plugin.yml`:
 

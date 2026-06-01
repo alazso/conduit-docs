@@ -20,8 +20,18 @@ jobs:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
+      - id: ver
+        name: Resolve Conduit versions
+        run: |
+          STABLE=$(curl -sSL https://api.github.com/repos/alazso/Conduit/releases/latest | jq -r '.tag_name // empty' | sed 's/^v//' || true)
+          SNAP=$(curl -sSL https://raw.githubusercontent.com/alazso/Conduit/main/gradle.properties | sed -n 's/^version=//p' | tr -d '[:space:]' || true)
+          echo "stable=$STABLE" >> "$GITHUB_OUTPUT"
+          echo "snapshot=$SNAP" >> "$GITHUB_OUTPUT"
       - uses: docker/build-push-action@v6
         with:
           context: .
           push: true
+          build-args: |
+            CONDUIT_VERSION=${{ steps.ver.outputs.stable }}
+            CONDUIT_SNAPSHOT_VERSION=${{ steps.ver.outputs.snapshot }}
           tags: ghcr.io/alazso/conduit-docs:latest

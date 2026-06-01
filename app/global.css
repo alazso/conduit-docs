@@ -2,11 +2,85 @@
 @import 'fumadocs-ui/css/neutral.css';
 @import 'fumadocs-ui/css/preset.css';
 
+/* ---- Conduit brand palette (electric violet + cyan) ---- */
+@theme {
+  --color-fd-primary: hsl(255 86% 58%);
+  --color-fd-primary-foreground: hsl(0 0% 100%);
+  --color-fd-ring: hsl(255 86% 58%);
+  --color-fd-accent: hsl(255 85% 96%);
+  --color-fd-accent-foreground: hsl(256 48% 30%);
+  --color-fd-background: hsl(258 45% 99%);
+}
+
+.dark {
+  --color-fd-primary: hsl(258 95% 76%);
+  --color-fd-primary-foreground: hsl(260 45% 12%);
+  --color-fd-ring: hsl(258 95% 76%);
+  --color-fd-accent: hsl(258 32% 18%);
+  --color-fd-accent-foreground: hsl(255 85% 93%);
+  --color-fd-background: hsl(258 24% 7%);
+  --color-fd-card: hsl(258 22% 9.5%);
+  --color-fd-popover: hsl(258 22% 9.5%);
+  --color-fd-secondary: hsl(258 20% 13%);
+  --color-fd-muted: hsl(258 18% 12%);
+  --color-fd-muted-foreground: hsl(258 12% 65%);
+  --color-fd-border: hsl(258 18% 17%);
+}
+
+/* ---- Base (kept from scaffold) ---- */
 html {
   scrollbar-gutter: stable;
 }
-
 html > body[data-scroll-locked] {
   margin-right: 0px !important;
   --removed-body-scroll-bar-size: 0px !important;
+}
+
+/* ---- Flare ---- */
+
+/* Display font on headings (the --font-display var is set by next/font in app/layout.tsx) */
+h1,
+h2,
+h3 {
+  font-family: var(--font-display), ui-sans-serif, system-ui, sans-serif;
+  letter-spacing: -0.015em;
+}
+
+/* Branded text selection */
+::selection {
+  background: color-mix(in srgb, var(--color-fd-primary) 28%, transparent);
+}
+
+/* Thin gradient accent bar pinned to the very top of every page */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0 0 auto 0;
+  height: 2px;
+  background: linear-gradient(
+    90deg,
+    var(--color-fd-primary),
+    hsl(190 95% 55%),
+    var(--color-fd-primary)
+  );
+  z-index: 50;
+  pointer-events: none;
+}
+
+/* Soft brand glow behind the top of the page */
+body {
+  background-image: radial-gradient(
+    60% 40% at 50% 0%,
+    color-mix(in srgb, var(--color-fd-primary) 8%, transparent),
+    transparent 70%
+  );
+  background-repeat: no-repeat;
+}
+
+/* Reusable gradient text, used by the nav wordmark and the landing hero */
+.text-gradient {
+  background-image: linear-gradient(135deg, var(--color-fd-primary), hsl(190 95% 55%));
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }

@@ -5,18 +5,32 @@ description: "A modern, async-first Economy abstraction for Minecraft."
 
 Conduit is a modern, single-domain **Economy** abstraction for Minecraft. It targets Paper/Folia on Java 25 and is async-first, `BigDecimal`-everywhere, and UUID-native. It is **not** a Vault fork or shim. It is its own API under `so.alaz.conduit`.
 
+<LatestVersion />
+
 If you have ever fought Vault's synchronous calls, `double` money, missing events, or load-order races, Conduit is the abstraction that fixes those at the design level instead of papering over them.
 
 ## Pick your path
 
-| You are... | Start here |
-|---|---|
-| A server operator installing Conduit | [Installation](/docs/installation) → [Configuration](/docs/configuration) → [Commands](/docs/commands) |
-| A plugin developer who wants to **use** an economy (shops, rewards, jobs) | [Consumer Guide](/docs/consumer-guide) → [How-To Recipes](/docs/how-to) |
-| A developer porting a plugin off Vault | [Migrating from Vault](/docs/migration-from-vault) |
-| A developer **implementing** an economy backend | [Provider Guide](/docs/provider-guide) → [Testing & Conformance](/docs/testing-and-conformance) |
-| A developer bridging an existing economy plugin (EssentialsX, etc.) | [Building a Bridge](/docs/building-a-bridge) |
-| Anyone who wants the mental model first | [Core Concepts](/docs/core-concepts) |
+<Cards>
+  <Card title="Server operators" href="/docs/installation">
+    Install Conduit and a provider, configure it, and run the `/conduit` admin commands.
+  </Card>
+  <Card title="Use an economy" href="/docs/consumer-guide">
+    Spend, check, and move money from your plugin: shops, rewards, jobs, and more.
+  </Card>
+  <Card title="Migrate from Vault" href="/docs/migration-from-vault">
+    Port a Vault consumer plugin to Conduit with a side-by-side translation guide.
+  </Card>
+  <Card title="Implement a backend" href="/docs/provider-guide">
+    Build an economy provider and register it with Conduit's registry.
+  </Card>
+  <Card title="Bridge a plugin" href="/docs/building-a-bridge">
+    Adapt EssentialsX or any existing economy plugin to the Conduit API.
+  </Card>
+  <Card title="Learn the model" href="/docs/core-concepts">
+    The async, `BigDecimal`, UUID, and capability model in one page.
+  </Card>
+</Cards>
 
 ## What Conduit is (and is not)
 
@@ -45,7 +59,7 @@ examples/                Reference plugins: shop, points, per-action fees, multi
 
 ## Versioning
 
-- Group `so.alaz.conduit`, current version `0.2.3` (pre-1.0).
+- Group `so.alaz.conduit`, pre-1.0.
 - API version constant: `Conduit.API_VERSION` (`"1.0"`). Providers declare a minimum via `Economy.requiredApiVersion()`; the registry rejects providers that require a newer API than the running runtime.
 - Pre-1.0, the core contract is stabilizing. Anything annotated `@ApiStatus.Experimental` may change before 1.0.
 

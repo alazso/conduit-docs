@@ -4,9 +4,24 @@ import { appName, gitConfig } from './shared';
 export function baseOptions(): BaseLayoutProps {
   return {
     nav: {
-      // JSX supported
-      title: appName,
+      title: (
+        <>
+          <span
+            aria-hidden
+            className="inline-flex size-6 items-center justify-center rounded-md bg-fd-primary text-sm font-bold text-fd-primary-foreground shadow-sm"
+          >
+            ⚡
+          </span>
+          <span className="text-gradient font-bold tracking-tight">{appName}</span>
+        </>
+      ),
+      transparentMode: 'top',
     },
+    links: [
+      { text: 'Docs', url: '/docs' },
+      { text: 'Provider Guide', url: '/docs/provider-guide' },
+      { text: 'Maven', url: 'https://repo.alaz.so' },
+    ],
     githubUrl: `https://github.com/${gitConfig.user}/${gitConfig.repo}`,
   };
 }

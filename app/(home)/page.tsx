@@ -1,4 +1,5 @@
 import Link from 'next/link';
+import { LatestVersion } from '@/components/latest-version';
 
 const features = [
   {
@@ -38,13 +39,14 @@ export default function HomePage() {
       {/* Hero */}
       <section className="mx-auto flex max-w-4xl flex-col items-center px-4 py-20 text-center">
         <div className="mb-5 flex flex-wrap items-center justify-center gap-2 text-xs font-medium text-fd-muted-foreground">
+          <LatestVersion />
           <span className="rounded-full border border-fd-border px-3 py-1">Paper / Folia</span>
           <span className="rounded-full border border-fd-border px-3 py-1">Java 25</span>
           <span className="rounded-full border border-fd-border px-3 py-1">Async-first</span>
           <span className="rounded-full border border-fd-border px-3 py-1">BigDecimal</span>
         </div>
 
-        <h1 className="bg-gradient-to-b from-fd-foreground to-fd-foreground/70 bg-clip-text text-5xl font-bold tracking-tight text-transparent sm:text-6xl">
+        <h1 className="text-gradient text-5xl font-bold tracking-tight sm:text-6xl">
           Conduit
         </h1>
         <p className="mt-4 text-lg font-medium text-fd-foreground sm:text-xl">

@@ -6,6 +6,11 @@ RUN npm ci --ignore-scripts
 
 FROM node:22-alpine AS builder
 WORKDIR /app
+# Version strings stamped into install snippets at build time (see source.config.ts).
+ARG CONDUIT_VERSION
+ARG CONDUIT_SNAPSHOT_VERSION
+ENV CONDUIT_VERSION=$CONDUIT_VERSION
+ENV CONDUIT_SNAPSHOT_VERSION=$CONDUIT_SNAPSHOT_VERSION
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 RUN npm run postinstall
